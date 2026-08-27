@@ -1,0 +1,48 @@
+# Explicit user ignore
+BACKPROPAGATION.md
+backprop.md
+*backprop*.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# CUDA / C++ Build Artefacts
+*.o
+*.obj
+*.exe
+*.dll
+*.lib
+*.exp
+*.out
+logistic_regression
+logistic_regression.exe
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.ninja
+.ninja_*
+cmake-build-*/
+
+# Datasets / Large Files
+*.csv
+titanic.csv
+*.tar.gz
+*.zip
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
