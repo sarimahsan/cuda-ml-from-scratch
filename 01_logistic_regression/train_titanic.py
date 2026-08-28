@@ -41,9 +41,9 @@ def preprocess_titanic(df: pd.DataFrame):
     df.drop(columns=[col for col in drop_cols if col in df.columns], inplace=True)
 
     # Impute missing values
-    df["Age"].fillna(df["Age"].median(), inplace=True)
-    df["Fare"].fillna(df["Fare"].median(), inplace=True)
-    df["Embarked"].fillna(df["Embarked"].mode()[0], inplace=True)
+    df["Age"] = df["Age"].fillna(df["Age"].median())
+    df["Fare"] = df["Fare"].fillna(df["Fare"].median())
+    df["Embarked"] = df["Embarked"].fillna(df["Embarked"].mode()[0])
 
     # Feature Engineering
     df["FamilySize"] = df["SibSp"] + df["Parch"] + 1

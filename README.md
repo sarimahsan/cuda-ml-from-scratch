@@ -13,3 +13,10 @@ A collection of machine learning algorithms built from the ground up using **cus
   - Backward gradient computation kernel via feature-parallel blocks
   - In-place SGD parameter update kernel
   - Python interface and full training script on the **Titanic Survival dataset**
+- **`02_mlp/`**: Multi-Layer Perceptron (MLP) implemented in raw CUDA C++:
+  - Tiled 2D shared-memory GEMM forward and backward kernels ($Z = X W + b$, $dW = X^T dZ$, $dX = dZ W^T$, $db = \sum dZ$)
+  - Custom forward and backward $\operatorname{ReLU}$ activation kernels
+  - Warp-reduced, numerically stable $\operatorname{Softmax}$ Categorical Cross-Entropy loss and exact analytical gradient kernel
+  - Vectorized GPU optimizers: **SGD with Momentum** and **Adam**
+  - Python interface (`CUDAMLP`) with flexible layer configurations and end-to-end **MNIST handwritten digit classification** (>98% accuracy)
+

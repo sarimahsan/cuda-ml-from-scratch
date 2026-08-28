@@ -53,8 +53,8 @@ pip install torch pandas numpy scikit-learn
    - Go to **Runtime** $\rightarrow$ **Change runtime type** $\rightarrow$ select **T4 GPU** (or A100).
 2. Clone or upload your repository, then run in a Colab code cell:
    ```bash
-   !git clone <YOUR_REPO_URL>
-   %cd <YOUR_REPO_NAME>/01_logistic_regression
+   !git clone https://github.com/sarimahsan/cuda-ml-from-scratch.git
+   %cd cuda-ml-from-scratch/01_logistic_regression
    !pip install pandas scikit-learn
    !python train_titanic.py
    ```
@@ -84,23 +84,43 @@ pip install -e .
 ================================================================
 
 [INFO] Raw Dataset shape: (891, 12)
+[INFO] Processed Features (11): ['Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'FamilySize', 'IsAlone', 'Embarked_Q', 'Embarked_S', 'Pclass_2', 'Pclass_3']
 [INFO] Training samples: 712, Test samples: 179
-[CUDA ML] Training Logistic Regression on 712 samples with 9 features...
-[CUDA ML] Device: NVIDIA GeForce RTX 3080
+[CUDA ML] Training Logistic Regression on 712 samples with 11 features...
+[CUDA ML] Device: Tesla T4
 
-  Epoch     1/ 3000 | Loss: 0.69315 | Train Acc: 61.66%
-  Epoch   300/ 3000 | Loss: 0.45281 | Train Acc: 80.48%
-  Epoch   600/ 3000 | Loss: 0.44312 | Train Acc: 80.76%
-  ...
-  Epoch  3000/ 3000 | Loss: 0.43849 | Train Acc: 81.32%
+  Epoch     1/ 3000 | Loss: 0.69315 | Train Acc: 38.34%
+  Epoch   300/ 3000 | Loss: 0.43609 | Train Acc: 80.48%
+  Epoch   600/ 3000 | Loss: 0.43377 | Train Acc: 80.06%
+  Epoch   900/ 3000 | Loss: 0.43332 | Train Acc: 80.20%
+  Epoch  1200/ 3000 | Loss: 0.43323 | Train Acc: 80.20%
+  Epoch  1500/ 3000 | Loss: 0.43322 | Train Acc: 80.34%
+  Epoch  3000/ 3000 | Loss: 0.43321 | Train Acc: 80.34%
 
 ----------------------------------------------------------------
                    Test Evaluation Metrics                      
 ----------------------------------------------------------------
   Test Accuracy:  80.45%
-  Precision:      76.56%
-  Recall:         71.01%
-  F1-Score:       73.68%
-  ROC-AUC Score:  0.8624
+  Precision:      78.33%
+  Recall:         68.12%
+  F1-Score:       72.87%
+  ROC-AUC Score:  0.8494
+
+----------------------------------------------------------------
+                  Learned Model Parameters                      
+----------------------------------------------------------------
+  Bias (Intercept): -0.6714
+  Feature Coefficients:
+    Sex            : +1.2503
+    Age            : -0.4975
+    SibSp          : -0.2918
+    Parch          : -0.0629
+    Fare           : +0.0873
+    FamilySize     : -0.2280
+    IsAlone        : -0.3094
+    Embarked_Q     : +0.1091
+    Embarked_S     : -0.1477
+    Pclass_2       : -0.4075
+    Pclass_3       : -1.0788
 ================================================================
 ```

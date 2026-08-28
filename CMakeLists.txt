@@ -8,8 +8,8 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --use_fast_math")
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/00_common/include)
 
 add_subdirectory(01_logistic_regression)
+add_subdirectory(02_mlp)
 # Future modules will be added here:
-# add_subdirectory(02_mlp)
 # add_subdirectory(03_cnn)
 # add_subdirectory(04_lstm)
 # add_subdirectory(05_attention)
