@@ -124,3 +124,28 @@ pip install -e .
     Pclass_3       : -1.0788
 ================================================================
 ```
+
+---
+
+## ⚡ Benchmarking: Custom CUDA vs PyTorch Native
+
+The `benchmark.py` script compares the custom CUDA C++ kernels against PyTorch's native autograd & cuBLAS GPU baseline:
+
+1. **Microbenchmarks**:
+   - Forward hypothesis: $\hat{\mathbf{y}} = \sigma(\mathbf{X}\mathbf{w} + b)$
+   - Binary Cross-Entropy loss with warp reduction: $\mathcal{L}_{\text{BCE}}$
+   - Backward analytical gradient computation: $\nabla_{\mathbf{w}}\mathcal{L}, \nabla_b\mathcal{L}$
+   - In-place SGD parameter update: $\mathbf{w} \leftarrow \mathbf{w} - \eta \nabla_{\mathbf{w}}\mathcal{L}$
+2. **Dataset Scaling**: Evaluates latency and throughput (Million samples/sec) across $N \in [10^4, 10^6]$ and $D \in [16, 1024]$.
+3. **Numerical Parity**: Verifies that gradient tensors and loss trajectories match PyTorch autograd within tolerance $\Delta < 10^{-4}$.
+4. **Memory Profiling**: Measures peak GPU VRAM allocation.
+
+### Run Logistic Regression Benchmark
+
+```bash
+# On Google Colab / GPU terminal
+python benchmark.py
+
+# Quick mode
+python benchmark.py --quick
+```

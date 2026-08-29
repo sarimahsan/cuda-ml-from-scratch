@@ -15,8 +15,30 @@ A collection of machine learning algorithms built from the ground up using **cus
   - Python interface and full training script on the **Titanic Survival dataset**
 - **`02_mlp/`**: Multi-Layer Perceptron (MLP) implemented in raw CUDA C++:
   - Tiled 2D shared-memory GEMM forward and backward kernels ($Z = X W + b$, $dW = X^T dZ$, $dX = dZ W^T$, $db = \sum dZ$)
-  - Custom forward and backward $\operatorname{ReLU}$ activation kernels
+  - Custom forward and backward $\operatorname{ReLU}$, $\operatorname{GELU}$, and $\operatorname{Sigmoid}$ activation kernels
   - Warp-reduced, numerically stable $\operatorname{Softmax}$ Categorical Cross-Entropy loss and exact analytical gradient kernel
   - Vectorized GPU optimizers: **SGD with Momentum** and **Adam**
   - Python interface (`CUDAMLP`) with flexible layer configurations and end-to-end **MNIST handwritten digit classification** (>98% accuracy)
+- **`benchmark_all.py`**: Unified Master GPU Benchmark Suite comparing custom CUDA C++ implementations against PyTorch Native baselines.
+
+---
+
+## ⚡ GPU Benchmarks: Custom CUDA vs PyTorch Native
+
+Both model architectures contain comprehensive benchmarking suites measuring micro-kernel latency, macro training step throughput, peak VRAM usage, and exact numerical parity against native PyTorch autograd.
+
+### 📍 Running on Google Colab
+
+```bash
+# 1. Clone repository
+!git clone https://github.com/sarimahsan/cuda-ml-from-scratch.git
+%cd cuda-ml-from-scratch
+
+# 2. Run all benchmarks
+!python benchmark_all.py --all
+
+# 3. Or benchmark individual models:
+!python benchmark_all.py --model logistic
+!python benchmark_all.py --model mlp
+```
 

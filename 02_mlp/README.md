@@ -156,3 +156,31 @@ Class-wise Accuracy:
               MLP Training Complete! 🚀                 
 =======================================================
 ```
+
+---
+
+## ⚡ Benchmarking: Custom CUDA MLP vs PyTorch Native
+
+The `benchmark.py` script rigorously tests and compares the custom modular CUDA C++ MLP kernels against PyTorch's native autograd & cuBLAS GPU baseline:
+
+1. **Kernel Microbenchmarks**:
+   - Tiled Shared-Memory GEMM: $\mathbf{Z} = \mathbf{X}\mathbf{W} + \mathbf{b}$
+   - Analytical GEMM Gradients: $\nabla_{\mathbf{W}} = \mathbf{X}^T \mathbf{dZ}$, $\nabla_{\mathbf{b}} = \sum \mathbf{dZ}$, $\nabla_{\mathbf{X}} = \mathbf{dZ} \mathbf{W}^T$
+   - Activations Forward & Backward: $\operatorname{ReLU}, \operatorname{GELU}, \operatorname{Sigmoid}$
+   - Fused Numerically Stable $\operatorname{Softmax}$ Cross-Entropy & Gradients
+   - Vectorized In-Place Optimizers: $\text{Adam}, \text{SGD with Momentum}$
+2. **Architecture & Batch Size Scaling**:
+   - Architectures: Small $[784, 128, 10]$, Standard $[784, 256, 128, 10]$, Deep $[1024, 1024, 512, 256, 10]$
+   - Batch sizes: $B \in \{64, 128, 512, 2048\}$
+3. **End-to-End MNIST Training**: Evaluates convergence, training throughput ($\text{images/sec}$), and final accuracy.
+4. **VRAM Footprint**: Measures peak GPU memory consumption.
+
+### Run MLP Benchmark
+
+```bash
+# On Google Colab / GPU terminal
+python benchmark.py
+
+# Quick mode
+python benchmark.py --quick --epochs 3
+```
