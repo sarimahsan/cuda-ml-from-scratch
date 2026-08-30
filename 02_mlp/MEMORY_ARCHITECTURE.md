@@ -63,7 +63,7 @@ $$\text{Total Persistent VRAM} = 3 \times \text{Memory}_{\text{Params}}$$
 For a mini-batch of size $B$:
 - **Input Batch**: $\mathbf{X} = \mathbf{A}^{(0)} \in \mathbb{R}^{B \times d_0}$
 - **Pre-Activations**: $\mathbf{Z}^{(i)} \in \mathbb{R}^{B \times d_{i+1}}$ for $i \in \{0, \dots, K-2\}$
-- **Hidden Activations**: $\mathbf{A}^{(i+1)} = \operatorname{act}(\mathbf{Z}^{(i)}) \in \mathbb{R}^{B \times d_{i+1}}$
+- **Hidden Activations**: $\mathbf{A}^{(i+1)} = \mathrm{act}(\mathbf{Z}^{(i)}) \in \mathbb{R}^{B \times d_{i+1}}$
 - **Output Logits**: $\mathbf{Z}^{(K-1)} \in \mathbb{R}^{B \times d_K}$
 - **Softmax Probabilities**: $\mathbf{P} \in \mathbb{R}^{B \times d_K}$
 
@@ -79,7 +79,7 @@ During backpropagation, analytical gradients are computed:
   - $\mathbf{dW}^{(i)} = (\mathbf{A}^{(i)})^T \mathbf{dZ}^{(i)} \in \mathbb{R}^{d_i \times d_{i+1}}$
   - $\mathbf{db}^{(i)} = \sum_{j=1}^B \mathbf{dZ}_{j,:}^{(i)} \in \mathbb{R}^{d_{i+1}}$
   - $\mathbf{dX}^{(i)} = \mathbf{dZ}^{(i)} (\mathbf{W}^{(i)})^T \in \mathbb{R}^{B \times d_i}$
-  - $\mathbf{dZ}^{(i-1)} = \mathbf{dX}^{(i)} \odot \operatorname{act}'(\mathbf{Z}^{(i-1)}) \in \mathbb{R}^{B \times d_i}$
+  - $\mathbf{dZ}^{(i-1)} = \mathbf{dX}^{(i)} \odot \mathrm{act}'(\mathbf{Z}^{(i-1)}) \in \mathbb{R}^{B \times d_i}$
 
 $$\text{Memory}_{\text{Gradients}}(B) = \text{Memory}_{\text{Params}} + 4 \times B \times \sum_{i=1}^K d_i \quad \text{[Bytes]}$$
 
@@ -137,7 +137,7 @@ $$\text{Global Memory Traffic (Tiled 16x16)} = \frac{2 \cdot M \cdot N \cdot K}{
 
 ### 4.2 Warp Shuffle Register Reductions (`csrc/softmax_loss.cu`)
 
-The fused $\operatorname{Softmax}$ and Categorical Cross-Entropy loss performs row-wise maximum finding, exponentiation, and summation:
+The fused $\mathrm{Softmax}$ and Categorical Cross-Entropy loss performs row-wise maximum finding, exponentiation, and summation:
 
 $$P_{i,c} = \frac{e^{Z_{i,c} - \max_k Z_{i,k}}}{\sum_{j} e^{Z_{i,j} - \max_k Z_{i,k}}}, \quad \mathcal{L}_i = -\ln(P_{i, y_i})$$
 

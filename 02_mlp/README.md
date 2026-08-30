@@ -1,6 +1,6 @@
 # 02 - Multi-Layer Perceptron (MLP) in Modular CUDA C++
 
-A high-performance **Multi-Layer Perceptron (MLP)** neural network built from scratch with **clean, modular CUDA C++ GPU kernel subsystems**, featuring 2D tiled shared-memory GEMM layers, modular activation functions ($\operatorname{ReLU}$, $\operatorname{GELU}$, $\operatorname{Sigmoid}$), numerically stable $\operatorname{Softmax}$ Categorical Cross-Entropy loss with warp-reduction shuffles, and GPU-vectorized optimizers (**SGD with Momentum** and **Adam**).
+A high-performance **Multi-Layer Perceptron (MLP)** neural network built from scratch with **clean, modular CUDA C++ GPU kernel subsystems**, featuring 2D tiled shared-memory GEMM layers, modular activation functions ($\mathrm{ReLU}$, $\mathrm{GELU}$, $\mathrm{Sigmoid}$), numerically stable $\mathrm{Softmax}$ Categorical Cross-Entropy loss with warp-reduction shuffles, and GPU-vectorized optimizers (**SGD with Momentum** and **Adam**).
 
 ---
 
@@ -48,11 +48,11 @@ For input $\mathbf{X} \in \mathbb{R}^{N \times D_{\text{in}}}$:
 
 $$\mathbf{Z}^{(1)} = \mathbf{X} \mathbf{W}^{(1)} + \mathbf{b}^{(1)} \in \mathbb{R}^{N \times H}$$
 
-$$\mathbf{A}^{(1)} = \operatorname{ReLU}\left(\mathbf{Z}^{(1)}\right) = \max\left(0, \mathbf{Z}^{(1)}\right)$$
+$$\mathbf{A}^{(1)} = \mathrm{ReLU}\left(\mathbf{Z}^{(1)}\right) = \max\left(0, \mathbf{Z}^{(1)}\right)$$
 
 $$\mathbf{Z}^{(2)} = \mathbf{A}^{(1)} \mathbf{W}^{(2)} + \mathbf{b}^{(2)} \in \mathbb{R}^{N \times C}$$
 
-$$\hat{Y}_{i,c} = \operatorname{Softmax}\left(\mathbf{Z}_{i,:}^{(2)}\right)_c = \frac{e^{Z_{i,c}^{(2)} - \max_k Z_{i,k}^{(2)}}}{\sum_{j=1}^C e^{Z_{i,j}^{(2)} - \max_k Z_{i,k}^{(2)}}}$$
+$$\hat{Y}_{i,c} = \mathrm{Softmax}\left(\mathbf{Z}_{i,:}^{(2)}\right)_c = \frac{e^{Z_{i,c}^{(2)} - \max_k Z_{i,k}^{(2)}}}{\sum_{j=1}^C e^{Z_{i,j}^{(2)} - \max_k Z_{i,k}^{(2)}}}$$
 
 ### 2. Loss Function (Categorical Cross-Entropy)
 $$\mathcal{L} = -\frac{1}{N} \sum_{i=1}^N \sum_{c=1}^C Y_{i,c} \ln(\hat{Y}_{i,c} + \epsilon)$$
@@ -71,7 +71,7 @@ $$\nabla_{\mathbf{W}^{(1)}} \mathcal{L} = \mathbf{X}^T \mathbf{dZ}^{(1)}, \quad 
 ## ⚡ Modular CUDA Highlights
 
 - **`linear.cu`**: $16 \times 16$ 2D tiled shared-memory GEMMs for forward ($Z = X W + b$), backward weight gradient ($dW = X^T dZ$), bias reduction ($db = \sum dZ$), and input gradient backpropagation ($dX = dZ W^T$).
-- **`activations.cu`**: Element-wise forward and backward kernels with support for $\operatorname{ReLU}$, $\operatorname{GELU}$, $\operatorname{Sigmoid}$, and $\operatorname{LeakyReLU}$.
+- **`activations.cu`**: Element-wise forward and backward kernels with support for $\mathrm{ReLU}$, $\mathrm{GELU}$, $\mathrm{Sigmoid}$, and $\mathrm{LeakyReLU}$.
 - **`softmax_loss.cu`**: Numerically stable Softmax with row-maximum subtraction and warp shuffles (`__shfl_down_sync`), paired with fused analytical error calculation $\frac{1}{N}(\hat{\mathbf{Y}} - \mathbf{Y})$.
 - **`optimizers.cu`**: Pure GPU vectorized updates for **SGD with Momentum** and **Adam** without CPU synchronization.
 
@@ -196,12 +196,12 @@ $$\text{Speedup} = \frac{T_{\text{PyTorch}}}{T_{\text{CUDA}}} = \frac{3.471\text
 | Kernel Operation | Custom CUDA | PyTorch Native | Speedup | Dominant Advantage |
 | :--- | :---: | :---: | :---: | :--- |
 | **Optimizer: Adam In-Place Step** | **$0.0178\text{ ms}$** | $0.3168\text{ ms}$ | **$17.83\times$** | Fused single-pass parameter + momentum updates |
-| **Activation: $\operatorname{ReLU}$ Backward** | **$0.0339\text{ ms}$** | $0.2511\text{ ms}$ | **$7.42\times$** | Zero autograd tape & dispatch overhead |
-| **Activation: $\operatorname{ReLU}$ Forward** | **$0.0236\text{ ms}$** | $0.0345\text{ ms}$ | **$1.46\times$** | Direct coalesced elementwise kernel |
-| **Activation: $\operatorname{GELU}$ Forward** | **$0.0202\text{ ms}$** | $0.0205\text{ ms}$ | **$1.02\times$** | Fast math approximation $\Phi(x)$ |
+| **Activation: $\mathrm{ReLU}$ Backward** | **$0.0339\text{ ms}$** | $0.2511\text{ ms}$ | **$7.42\times$** | Zero autograd tape & dispatch overhead |
+| **Activation: $\mathrm{ReLU}$ Forward** | **$0.0236\text{ ms}$** | $0.0345\text{ ms}$ | **$1.46\times$** | Direct coalesced elementwise kernel |
+| **Activation: $\mathrm{GELU}$ Forward** | **$0.0202\text{ ms}$** | $0.0205\text{ ms}$ | **$1.02\times$** | Fast math approximation $\Phi(x)$ |
 | **Linear Forward GEMM ($Z = XW+b$)** | $0.4773\text{ ms}$ | $0.1291\text{ ms}$ | $0.27\times$ | $16\times 16$ Shared-memory tiling vs. cuBLAS |
 | **Linear Backward GEMM ($dW, db, dX$)** | $1.3460\text{ ms}$ | $0.3837\text{ ms}$ | $0.29\times$ | FP32 CUDA cores vs. cuBLAS Tensor Cores |
-| **Fused $\operatorname{Softmax}$ + CE Loss** | $1.1018\text{ ms}$ | $0.4089\text{ ms}$ | $0.37\times$ | Fused analytical gradient $dZ = \frac{P - Y}{N}$ |
+| **Fused $\mathrm{Softmax}$ + CE Loss** | $1.1018\text{ ms}$ | $0.4089\text{ ms}$ | $0.37\times$ | Fused analytical gradient $dZ = \frac{P - Y}{N}$ |
 
 $$\text{Adam Parameter Update: } \theta_{t+1} = \theta_t - \frac{\eta}{\sqrt{\hat{v}_t} + \epsilon}\hat{m}_t$$
 
@@ -245,4 +245,4 @@ $$\text{Throughput} = \frac{B}{T_{\text{batch}}} \quad \left[\frac{\text{samples
    In standard deep learning training workflows ($B \in \{64, 128\}$), PyTorch incurs significant overhead from dynamic memory allocations, Python C10 engine dispatch, and Autograd computational graph construction. The custom CUDA kernels execute in-place directly on GPU memory with zero host-side synchronization, delivering up to **$6.87\times$ lower batch latency**.
 
 2. **Why Optimizer & Activation Kernels Are Massively Faster**:
-   The custom **Adam optimizer** achieves a **$17.83\times$ speedup** and **$\operatorname{ReLU}$ backward** achieves a **$7.42\times$ speedup** because all gradient updates and state transformations are executed in a single vectorized memory sweep without intermediate tensor allocations.
+   The custom **Adam optimizer** achieves a **$17.83\times$ speedup** and **$\mathrm{ReLU}$ backward** achieves a **$7.42\times$ speedup** because all gradient updates and state transformations are executed in a single vectorized memory sweep without intermediate tensor allocations.

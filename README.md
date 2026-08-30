@@ -15,12 +15,12 @@ A collection of machine learning algorithms built from the ground up using **cus
   - Python interface and full training script on the **Titanic Survival dataset**
 - **`02_mlp/`**: Multi-Layer Perceptron (MLP) implemented in raw CUDA C++:
   - Tiled 2D shared-memory GEMM forward and backward kernels ($Z = X W + b$, $dW = X^T dZ$, $dX = dZ W^T$, $db = \sum dZ$)
-  - Custom forward and backward $\operatorname{ReLU}$, $\operatorname{GELU}$, and $\operatorname{Sigmoid}$ activation kernels
-  - Warp-reduced, numerically stable $\operatorname{Softmax}$ Categorical Cross-Entropy loss and exact analytical gradient kernel
+  - Custom forward and backward $\mathrm{ReLU}$, $\mathrm{GELU}$, and $\mathrm{Sigmoid}$ activation kernels
+  - Warp-reduced, numerically stable $\mathrm{Softmax}$ Categorical Cross-Entropy loss and exact analytical gradient kernel
   - Vectorized GPU optimizers: **SGD with Momentum** and **Adam**
   - Python interface (`CUDAMLP`) with flexible layer configurations and end-to-end **MNIST handwritten digit classification** (>98% accuracy)
 - **`03_cnn/`**: Convolutional Neural Network (CNN) implemented in raw CUDA C++:
-  - 2D spatial convolution forward and backward kernels ($Z = \operatorname{Conv2D}(X, W) + b$, $dW$, $dX$, $db$)
+  - 2D spatial convolution forward and backward kernels ($Z = \mathrm{Conv2D}(X, W) + b$, $dW$, $dX$, $db$)
   - 2D Max Pooling forward kernel with argmax mask retention and exact backward subgradient routing
   - Tiled shared-memory GEMM fully connected layers
   - Python interface (`CUDACNN`) and end-to-end **MNIST handwritten digit classification** (>98.6% test accuracy)

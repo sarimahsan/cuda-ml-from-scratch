@@ -1,6 +1,6 @@
 # 03 - Convolutional Neural Network (CNN) in Modular CUDA C++
 
-A high-performance **Convolutional Neural Network (CNN)** built from scratch with **modular CUDA C++ GPU kernel subsystems**, featuring forward and backward 2D spatial convolutions, 2D Max Pooling with subgradient argmax masks, 2D tiled shared-memory GEMM fully connected layers, non-linear activations ($\operatorname{ReLU}$, $\operatorname{GELU}$, $\operatorname{Sigmoid}$), numerically stable $\operatorname{Softmax}$ Categorical Cross-Entropy loss with warp-shuffle reductions, and GPU-vectorized optimizers (**SGD with Momentum** and **Adam**).
+A high-performance **Convolutional Neural Network (CNN)** built from scratch with **modular CUDA C++ GPU kernel subsystems**, featuring forward and backward 2D spatial convolutions, 2D Max Pooling with subgradient argmax masks, 2D tiled shared-memory GEMM fully connected layers, non-linear activations ($\mathrm{ReLU}$, $\mathrm{GELU}$, $\mathrm{Sigmoid}$), numerically stable $\mathrm{Softmax}$ Categorical Cross-Entropy loss with warp-shuffle reductions, and GPU-vectorized optimizers (**SGD with Momentum** and **Adam**).
 
 ---
 
@@ -64,10 +64,10 @@ For input feature map $\mathbf{X} \in \mathbb{R}^{N \times C_{\text{in}} \times 
 
 ### 2. Max Pooling 2D
 - **Forward with Argmax Mask**:
-  $$P_{n, c, h, w} = \max_{0 \le i < 2,\, 0 \le j < 2} X_{n, c,\, 2h+i,\, 2w+j}, \quad \operatorname{Mask}_{n, c, h, w} = \arg\max X$$
+  $$P_{n, c, h, w} = \max_{0 \le i < 2,\, 0 \le j < 2} X_{n, c,\, 2h+i,\, 2w+j}, \quad \mathrm{Mask}_{n, c, h, w} = \mathrm{argmax} X$$
 
 - **Backward Subgradient Routing**:
-  $$\frac{\partial \mathcal{L}}{\partial X_{n, c, \tilde{h}, \tilde{w}}} = \sum_{h, w} dP_{n, c, h, w} \cdot \mathbb{I}\left(\operatorname{Mask}_{n, c, h, w} == (\tilde{h}, \tilde{w})\right)$$
+  $$\frac{\partial \mathcal{L}}{\partial X_{n, c, \tilde{h}, \tilde{w}}} = \sum_{h, w} dP_{n, c, h, w} \cdot \mathbb{I}\left(\mathrm{Mask}_{n, c, h, w} == (\tilde{h}, \tilde{w})\right)$$
 
 ### 3. Fused Softmax Cross-Entropy Loss & Analytical Gradient
 $$\mathcal{L} = -\frac{1}{N} \sum_{n=1}^N \sum_{c=1}^C Y_{n, c} \ln(\hat{Y}_{n, c}), \quad \mathbf{dZ} = \frac{1}{N} (\hat{\mathbf{Y}} - \mathbf{Y})$$
@@ -79,7 +79,7 @@ $$\mathcal{L} = -\frac{1}{N} \sum_{n=1}^N \sum_{c=1}^C Y_{n, c} \ln(\hat{Y}_{n, 
 - **`conv2d.cu`**: Coalesced 2D spatial convolution forward and backward kernels with boundary handling and zero-overhead striding.
 - **`pool.cu`**: Max pooling forward kernel retaining 64-bit coordinate masks for exact subgradient routing.
 - **`linear.cu`**: $16 \times 16$ 2D tiled shared-memory GEMM for fully connected classification layers.
-- **`activations.cu`**: Element-wise forward and backward kernels for $\operatorname{ReLU}$, $\operatorname{GELU}$, and $\operatorname{Sigmoid}$.
+- **`activations.cu`**: Element-wise forward and backward kernels for $\mathrm{ReLU}$, $\mathrm{GELU}$, and $\mathrm{Sigmoid}$.
 - **`softmax_loss.cu`**: Numerically stable Softmax with warp shuffles (`__shfl_down_sync`) and fused analytical error gradient $\frac{1}{N}(\hat{\mathbf{Y}} - \mathbf{Y})$.
 - **`optimizers.cu`**: In-place GPU vectorized parameter updates for **SGD with Momentum** and **Adam**.
 
@@ -90,10 +90,10 @@ $$\mathcal{L} = -\frac{1}{N} \sum_{n=1}^N \sum_{c=1}^C Y_{n, c} \ln(\hat{Y}_{n, 
 Training on the official **MNIST Handwritten Digits Dataset** ($60{,}000$ train, $10{,}000$ test images) using the custom CUDA CNN:
 
 ### ⚙️ Network Architecture
-- **Layer 1**: $\operatorname{Conv2D}(1 \to 16, 3 \times 3, \text{pad } 1) \to \operatorname{ReLU} \to \operatorname{MaxPool2D}(2 \times 2) \to [16, 14, 14]$
-- **Layer 2**: $\operatorname{Conv2D}(16 \to 32, 3 \times 3, \text{pad } 1) \to \operatorname{ReLU} \to \operatorname{MaxPool2D}(2 \times 2) \to [32, 7, 7]$
-- **Layer 3**: $\operatorname{Linear}(1568 \to 128) \to \operatorname{ReLU}$
-- **Layer 4**: $\operatorname{Linear}(128 \to 10) \to \operatorname{Softmax}$ Cross-Entropy Loss
+- **Layer 1**: $\mathrm{Conv2D}(1 \to 16, 3 \times 3, \text{pad } 1) \to \mathrm{ReLU} \to \mathrm{MaxPool2D}(2 \times 2) \to [16, 14, 14]$
+- **Layer 2**: $\mathrm{Conv2D}(16 \to 32, 3 \times 3, \text{pad } 1) \to \mathrm{ReLU} \to \mathrm{MaxPool2D}(2 \times 2) \to [32, 7, 7]$
+- **Layer 3**: $\mathrm{Linear}(1568 \to 128) \to \mathrm{ReLU}$
+- **Layer 4**: $\mathrm{Linear}(128 \to 10) \to \mathrm{Softmax}$ Cross-Entropy Loss
 - **Optimizer**: Adam ($\text{lr} = 0.001$, batch size $= 64$, epochs $= 5$)
 
 ### 📈 Training Progression Across Epochs
