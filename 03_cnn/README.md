@@ -36,7 +36,7 @@ The CNN module is structured into clean, decoupled layers:
 │   ├── optimizers.cu       # In-place PyTorch tensor optimizers (Adam & SGD Momentum)
 │   └── binding.cpp         # Pybind11 registration module
 ├── cnn.py                  # High-level Python wrapper with automatic JIT compilation
-├── train_mnist.py          # Real MNIST dataset training script (>99% accuracy)
+├── train_mnist.py          # Real MNIST dataset training script (>98.6% accuracy)
 ├── benchmark.py            # Comprehensive benchmark suite (Custom CUDA vs PyTorch cuDNN)
 ├── setup.py                # Setuptools configuration for AOT building
 ├── CMakeLists.txt          # CMake build configuration
@@ -85,6 +85,73 @@ $$\mathcal{L} = -\frac{1}{N} \sum_{n=1}^N \sum_{c=1}^C Y_{n, c} \ln(\hat{Y}_{n, 
 
 ---
 
+## 📊 Empirical Results: Real MNIST Training
+
+Training on the official **MNIST Handwritten Digits Dataset** ($60{,}000$ train, $10{,}000$ test images) using the custom CUDA CNN:
+
+### ⚙️ Network Architecture
+- **Layer 1**: $\operatorname{Conv2D}(1 \to 16, 3 \times 3, \text{pad } 1) \to \operatorname{ReLU} \to \operatorname{MaxPool2D}(2 \times 2) \to [16, 14, 14]$
+- **Layer 2**: $\operatorname{Conv2D}(16 \to 32, 3 \times 3, \text{pad } 1) \to \operatorname{ReLU} \to \operatorname{MaxPool2D}(2 \times 2) \to [32, 7, 7]$
+- **Layer 3**: $\operatorname{Linear}(1568 \to 128) \to \operatorname{ReLU}$
+- **Layer 4**: $\operatorname{Linear}(128 \to 10) \to \operatorname{Softmax}$ Cross-Entropy Loss
+- **Optimizer**: Adam ($\text{lr} = 0.001$, batch size $= 64$, epochs $= 5$)
+
+### 📈 Training Progression Across Epochs
+
+```text
+Epoch [1/5] | Step [937/937] | Loss: 0.1438 | Train Acc: 95.45% --> Epoch 1 Completed in 6.91s | Val Loss: 0.0492 | Val Acc: 98.49%
+Epoch [2/5] | Step [937/937] | Loss: 0.0481 | Train Acc: 98.53% --> Epoch 2 Completed in 6.89s | Val Loss: 0.0393 | Val Acc: 98.68%
+Epoch [3/5] | Step [937/937] | Loss: 0.0339 | Train Acc: 98.93% --> Epoch 3 Completed in 6.61s | Val Loss: 0.0370 | Val Acc: 98.78%
+Epoch [4/5] | Step [937/937] | Loss: 0.0242 | Train Acc: 99.20% --> Epoch 4 Completed in 6.77s | Val Loss: 0.0332 | Val Acc: 98.93%
+Epoch [5/5] | Step [937/937] | Loss: 0.0186 | Train Acc: 99.41% --> Epoch 5 Completed in 6.63s | Val Loss: 0.0426 | Val Acc: 98.61%
+```
+
+| Epoch | Duration | Training Loss | Training Accuracy | Validation Loss | Validation Accuracy |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| **1** | $6.91\text{ s}$ | $0.1438$ | $95.45\%$ | $0.0492$ | $98.49\%$ |
+| **2** | $6.89\text{ s}$ | $0.0481$ | $98.53\%$ | $0.0393$ | $98.68\%$ |
+| **3** | $6.61\text{ s}$ | $0.0339$ | $98.93\%$ | $0.0370$ | $98.78\%$ |
+| **4** | $6.77\text{ s}$ | $0.0242$ | $99.20\%$ | $0.0332$ | **$98.93\%$** |
+| **5** | $6.63\text{ s}$ | $0.0186$ | **$99.41\%$** | $0.0426$ | $98.61\%$ |
+
+- **Total Training Duration**: **$34.55\text{ s}$** ($6.91\text{ s/epoch}$)
+- **Final Test Accuracy**: **$98.61\%$** (Peak Val Accuracy: **$98.93\%$**)
+
+---
+
+## ⚡ GPU Benchmarks: Custom CUDA vs. PyTorch Native (Tesla T4)
+
+The [`benchmark.py`](file:///e:/CUDA/03_cnn/benchmark.py) suite evaluates custom CUDA kernels against PyTorch's cuDNN backend on an **NVIDIA Tesla T4 GPU (CUDA 12.8 / PyTorch 2.11.0)**:
+
+### 1. Microbenchmark: MaxPool2D Forward
+| Configuration ($N, C, H, W$) | Custom CUDA | PyTorch Native | Speedup |
+| :--- | :---: | :---: | :---: |
+| $N=64, C=16, 28 \times 28$ | **$0.041\text{ ms}$** | $0.049\text{ ms}$ | **$1.20\times$ faster** |
+| $N=64, C=32, 14 \times 14$ | **$0.033\text{ ms}$** | $0.043\text{ ms}$ | **$1.30\times$ faster** |
+| $N=128, C=64, 14 \times 14$ | **$0.052\text{ ms}$** | $0.056\text{ ms}$ | **$1.08\times$ faster** |
+
+### 2. Microbenchmark: Conv2D Forward
+| Configuration ($N, C_{\text{in}}, H, W \to C_{\text{out}}$) | Custom CUDA | PyTorch Native (cuDNN) | Speedup |
+| :--- | :---: | :---: | :---: |
+| $N=64, C_{\text{in}}=1, 28 \times 28 \to C_{\text{out}}=16$ | **$0.097\text{ ms}$** | $0.121\text{ ms}$ | **$1.24\times$ faster** |
+| $N=64, C_{\text{in}}=16, 14 \times 14 \to C_{\text{out}}=32$ | $0.426\text{ ms}$ | $0.155\text{ ms}$ | $0.36\times$ |
+| $N=128, C_{\text{in}}=32, 14 \times 14 \to C_{\text{out}}=64$ | $3.369\text{ ms}$ | $0.376\text{ ms}$ | $0.11\times$ |
+
+### 3. Macrobenchmark: Training Step Throughput
+| Batch Size ($B$) | Custom CUDA Latency | PyTorch Latency | Custom Throughput | PyTorch Throughput |
+| :---: | :---: | :---: | :---: | :---: |
+| **$32$** | $3.302\text{ ms}$ | $1.931\text{ ms}$ | **$9{,}690.7\text{ imgs/s}$** | $16{,}572.2\text{ imgs/s}$ |
+| **$64$** | $8.570\text{ ms}$ | $2.030\text{ ms}$ | **$7{,}468.3\text{ imgs/s}$** | $31{,}529.6\text{ imgs/s}$ |
+| **$128$** | $13.720\text{ ms}$ | $1.911\text{ ms}$ | **$9{,}329.6\text{ imgs/s}$** | $66{,}972.2\text{ imgs/s}$ |
+| **$256$** | $27.779\text{ ms}$ | $2.662\text{ ms}$ | **$9{,}215.6\text{ imgs/s}$** | $96{,}169.6\text{ imgs/s}$ |
+
+### 4. Memory Profiling: Peak VRAM Footprint ($B = 128$)
+| Metric | Custom CUDA CNN | PyTorch Native Autograd | Memory Savings |
+| :--- | :---: | :---: | :---: |
+| **Peak VRAM Allocated** | **$43.08\text{ MB}$** | $52.48\text{ MB}$ | **$+9.41\text{ MB}$ saved ($17.9\%$ less memory)** |
+
+---
+
 ## 🛠️ Requirements
 
 ```bash
@@ -106,7 +173,7 @@ pip install torch ninja torchvision numpy
 
 ### 📍 Running Locally (Linux / Windows with NVIDIA GPU)
 
-1. **Train on MNIST (>99% accuracy)**:
+1. **Train on MNIST (>98.6% accuracy)**:
    ```bash
    python train_mnist.py
    ```

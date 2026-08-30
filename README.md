@@ -23,7 +23,7 @@ A collection of machine learning algorithms built from the ground up using **cus
   - 2D spatial convolution forward and backward kernels ($Z = \operatorname{Conv2D}(X, W) + b$, $dW$, $dX$, $db$)
   - 2D Max Pooling forward kernel with argmax mask retention and exact backward subgradient routing
   - Tiled shared-memory GEMM fully connected layers
-  - Python interface (`CUDACNN`) and end-to-end **MNIST handwritten digit classification** (>99% accuracy)
+  - Python interface (`CUDACNN`) and end-to-end **MNIST handwritten digit classification** (>98.6% test accuracy)
 - **`benchmark_all.py`**: Unified Master GPU Benchmark Suite comparing custom CUDA C++ implementations against PyTorch Native baselines.
 
 ---
