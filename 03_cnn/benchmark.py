@@ -189,7 +189,7 @@ def benchmark_end_to_end_training(device: str = "cuda", quick: bool = False):
         y_onehot = torch.nn.functional.one_hot(y, 10).float()
 
         # Custom CUDA CNN
-        custom_model = CUDACNN(1, 28, 28, 16, 32, 128, 10, lr=0.001).to(device)
+        custom_model = CUDACNN(1, 28, 28, 16, 32, 128, 10, lr=0.001, device=device).to(device)
 
         def custom_step():
             logits = custom_model(X)
@@ -232,7 +232,7 @@ def benchmark_memory(device: str = "cuda", B: int = 128):
     y_onehot = torch.nn.functional.one_hot(y, 10).float()
 
     # Profile Custom CUDA CNN
-    custom_model = CUDACNN(1, 28, 28, 16, 32, 128, 10, lr=0.001).to(dev)
+    custom_model = CUDACNN(1, 28, 28, 16, 32, 128, 10, lr=0.001, device=device).to(dev)
     logits = custom_model(X)
     loss, _, _ = custom_model.compute_loss_and_probs(logits, y_onehot)
     loss.backward()

@@ -59,7 +59,7 @@ class CUDAConv2dFunction(torch.autograd.Function):
         ctx.stride = stride
         ctx.pad = pad
         ctx.has_bias = b is not None
-        return _ext.conv2d_forward(X, W, b if b is not None else torch.tensor([]), stride, pad)
+        return _ext.conv2d_forward(X, W, b if b is not None else torch.tensor([], device=X.device), stride, pad)
 
     @staticmethod
     def backward(ctx, dO: torch.Tensor):
@@ -90,7 +90,7 @@ class CUDALinearFunction(torch.autograd.Function):
     def forward(ctx, X: torch.Tensor, W: torch.Tensor, b: Optional[torch.Tensor]):
         ctx.save_for_backward(X, W)
         ctx.has_bias = b is not None
-        return _ext.linear_forward(X, W, b if b is not None else torch.tensor([]))
+        return _ext.linear_forward(X, W, b if b is not None else torch.tensor([], device=X.device))
 
     @staticmethod
     def backward(ctx, dZ: torch.Tensor):
@@ -112,11 +112,27 @@ class CUDAReLUFunction(torch.autograd.Function):
         return _ext.relu_backward(dA.contiguous(), Z)
 
 
+class CUDASoftmaxCrossEntropyFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, logits: torch.Tensor, targets: torch.Tensor):
+        loss, probs, dZ = _ext.softmax_cross_entropy(logits, targets)
+        ctx.save_for_backward(dZ)
+        ctx.probs = probs
+        return loss, probs
+
+    @staticmethod
+    def backward(ctx, grad_loss, grad_probs=None):
+        dZ, = ctx.saved_tensors
+        if grad_loss is not None:
+            return dZ * grad_loss, None
+        return dZ, None
+
+
 # -------------------------------------------------------------------------
 # Custom Module Layers
 # -------------------------------------------------------------------------
 class CUDAConv2d(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3, stride: int = 1, padding: int = 1, bias: bool = True):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3, stride: int = 1, padding: int = 1, bias: bool = True, device: str = "cuda"):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -126,9 +142,9 @@ class CUDAConv2d(nn.Module):
 
         # Kaiming He Normal initialization
         std = math.sqrt(2.0 / (in_channels * kernel_size * kernel_size))
-        self.weight = nn.Parameter(torch.randn(out_channels, in_channels, kernel_size, kernel_size, device="cuda") * std)
+        self.weight = nn.Parameter(torch.randn(out_channels, in_channels, kernel_size, kernel_size, device=device) * std)
         if bias:
-            self.bias = nn.Parameter(torch.zeros(out_channels, device="cuda"))
+            self.bias = nn.Parameter(torch.zeros(out_channels, device=device))
         else:
             self.register_parameter("bias", None)
 
@@ -148,15 +164,15 @@ class CUDAMaxPool2d(nn.Module):
 
 
 class CUDALinear(nn.Module):
-    def __init__(self, in_features: int, out_features: int, bias: bool = True):
+    def __init__(self, in_features: int, out_features: int, bias: bool = True, device: str = "cuda"):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
 
         std = math.sqrt(2.0 / in_features)
-        self.weight = nn.Parameter(torch.randn(in_features, out_features, device="cuda") * std)
+        self.weight = nn.Parameter(torch.randn(in_features, out_features, device=device) * std)
         if bias:
-            self.bias = nn.Parameter(torch.zeros(out_features, device="cuda"))
+            self.bias = nn.Parameter(torch.zeros(out_features, device=device))
         else:
             self.register_parameter("bias", None)
 
@@ -192,6 +208,7 @@ class CUDACNN(nn.Module):
         num_classes: int = 10,
         lr: float = 0.01,
         momentum: float = 0.9,
+        device: str = "cuda"
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -201,14 +218,15 @@ class CUDACNN(nn.Module):
         self.lr = lr
         self.momentum = momentum
         self.step_count = 0
+        self.device = device
 
         # Conv1: [N, in_channels, 28, 28] -> [N, conv1_channels, 28, 28]
-        self.conv1 = CUDAConv2d(in_channels, conv1_channels, kernel_size=3, stride=1, padding=1)
+        self.conv1 = CUDAConv2d(in_channels, conv1_channels, kernel_size=3, stride=1, padding=1, device=device)
         self.relu1 = CUDAReLU()
         self.pool1 = CUDAMaxPool2d(kernel_size=2, stride=2)  # -> [N, conv1_channels, 14, 14]
 
         # Conv2: [N, conv1_channels, 14, 14] -> [N, conv2_channels, 14, 14]
-        self.conv2 = CUDAConv2d(conv1_channels, conv2_channels, kernel_size=3, stride=1, padding=1)
+        self.conv2 = CUDAConv2d(conv1_channels, conv2_channels, kernel_size=3, stride=1, padding=1, device=device)
         self.relu2 = CUDAReLU()
         self.pool2 = CUDAMaxPool2d(kernel_size=2, stride=2)  # -> [N, conv2_channels, 7, 7]
 
@@ -218,9 +236,9 @@ class CUDACNN(nn.Module):
         self.flat_dim = conv2_channels * h_pool2 * w_pool2
 
         # Fully Connected Layers
-        self.fc1 = CUDALinear(self.flat_dim, fc_hidden)
+        self.fc1 = CUDALinear(self.flat_dim, fc_hidden, device=device)
         self.relu3 = CUDAReLU()
-        self.fc2 = CUDALinear(fc_hidden, num_classes)
+        self.fc2 = CUDALinear(fc_hidden, num_classes, device=device)
 
         # Optimizer State Buffers
         self.v_params = {}
@@ -242,14 +260,14 @@ class CUDACNN(nn.Module):
 
     def compute_loss_and_probs(self, logits: torch.Tensor, targets: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Numerically stable CUDA Softmax Cross-Entropy.
+        Numerically stable CUDA Softmax Cross-Entropy with full autograd support.
         targets: One-hot encoded [N, num_classes] or class indices [N].
         """
         if targets.dim() == 1 or targets.size(1) != self.num_classes:
             targets = torch.nn.functional.one_hot(targets.long(), num_classes=self.num_classes).float()
         
-        loss, probs, dZ = _ext.softmax_cross_entropy(logits, targets)
-        return loss, probs, dZ
+        loss, probs = CUDASoftmaxCrossEntropyFunction.apply(logits, targets)
+        return loss, probs, None
 
     def step_optimizer(self, method: str = "momentum", beta1: float = 0.9, beta2: float = 0.999, eps: float = 1e-8):
         """
@@ -278,10 +296,10 @@ class CUDACNN(nn.Module):
         total = 0
 
         for X, y in dataloader:
-            X, y = X.cuda(), y.cuda()
+            X, y = X.to(self.device), y.to(self.device)
             logits = self.forward(X)
             targets_onehot = torch.nn.functional.one_hot(y.long(), num_classes=self.num_classes).float()
-            loss, probs, _ = self.compute_loss_and_probs(logits, targets_onehot)
+            loss, probs = CUDASoftmaxCrossEntropyFunction.apply(logits, targets_onehot)
 
             total_loss += loss.item() * X.size(0)
             preds = torch.argmax(probs, dim=1)
