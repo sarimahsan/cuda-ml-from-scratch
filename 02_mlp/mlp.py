@@ -1,5 +1,8 @@
 import os
 import math
+import shutil
+import subprocess
+import sys
 import time
 from typing import List, Optional, Union
 import torch
@@ -8,6 +11,19 @@ from torch.utils.cpp_extension import load
 # -------------------------------------------------------------------------
 # Dynamic Extension Loader (Compiles modular CUDA sources)
 # -------------------------------------------------------------------------
+def _ensure_ninja():
+    if shutil.which("ninja") is None:
+        try:
+            import ninja  # type: ignore
+        except ImportError:
+            print("[INFO] 'ninja' build tool not detected. Auto-installing ninja for JIT compilation...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "ninja", "--quiet"])
+            except Exception as e:
+                print(f"[WARNING] Auto-installing ninja failed: {e}")
+
+_ensure_ninja()
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sources = [
     os.path.join(current_dir, "csrc", "binding.cpp"),

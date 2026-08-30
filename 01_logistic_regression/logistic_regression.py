@@ -1,10 +1,26 @@
 import os
+import shutil
+import subprocess
+import sys
 import torch
 from torch.utils.cpp_extension import load
 
 # -------------------------------------------------------------------------
 # Dynamic Extension Loader (JIT compile or load installed AOT extension)
 # -------------------------------------------------------------------------
+def _ensure_ninja():
+    if shutil.which("ninja") is None:
+        try:
+            import ninja  # type: ignore
+        except ImportError:
+            print("[INFO] 'ninja' build tool not detected. Auto-installing ninja for JIT compilation...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "ninja", "--quiet"])
+            except Exception as e:
+                print(f"[WARNING] Auto-installing ninja failed: {e}")
+
+_ensure_ninja()
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sources = [
     os.path.join(current_dir, "csrc", "binding.cpp"),

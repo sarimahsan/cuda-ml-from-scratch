@@ -16,9 +16,23 @@ Usage:
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import torch
+
+
+def ensure_dependencies():
+    if shutil.which("ninja") is None:
+        try:
+            import ninja  # type: ignore
+        except ImportError:
+            print("[INFO] 'ninja' build tool not detected. Auto-installing ninja for fast JIT compilation...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "ninja", "--quiet"])
+                print("[INFO] ninja installed successfully.")
+            except Exception as e:
+                print(f"[WARNING] Auto-installing ninja failed: {e}")
 
 
 def print_banner():
@@ -64,15 +78,16 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        choices=["all", "logistic", "mlp"],
+        choices=["all", "logistic", "mlp", "cnn"],
         default="all",
-        help="Which model benchmark to execute (logistic, mlp, or all)",
+        help="Which model benchmark to execute (logistic, mlp, cnn, or all)",
     )
     parser.add_argument("--quick", action="store_true", help="Execute faster benchmarks with reduced iterations")
     parser.add_argument("--device", type=str, default="cuda", help="Target device (default: cuda)")
     args = parser.parse_args()
 
     print_banner()
+    ensure_dependencies()
 
     extra_args = []
     if args.quick:
@@ -85,6 +100,9 @@ def main():
 
     if args.model in ["all", "mlp"]:
         run_benchmark("02_mlp", "benchmark.py", extra_args)
+
+    if args.model in ["all", "cnn"]:
+        run_benchmark("03_cnn", "benchmark.py", extra_args)
 
 
 if __name__ == "__main__":

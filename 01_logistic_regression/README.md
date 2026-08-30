@@ -40,7 +40,7 @@ $$b \leftarrow b - \eta \nabla_b \mathcal{L}$$
 ## 🛠️ Requirements
 
 ```bash
-pip install torch pandas numpy scikit-learn
+pip install torch ninja pandas numpy scikit-learn
 ```
 
 ---
