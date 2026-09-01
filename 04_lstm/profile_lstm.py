@@ -59,11 +59,8 @@ def profile_lstm_breakdown(
 
     # Backward timers
     bwd_gate_ev    = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
-    bwd_dw_ih_ev   = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
-    bwd_dw_hh_ev   = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
-    bwd_dx_ev      = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
-    bwd_dh_ev      = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
-    bwd_dbias_ev   = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
+    bwd_lin_ih_ev  = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
+    bwd_lin_hh_ev  = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
 
     # Warmup
     for _ in range(num_warmup):
@@ -78,11 +75,8 @@ def profile_lstm_breakdown(
     t_fwd_gate = 0.0
 
     t_bwd_gate = 0.0
-    t_bwd_dw_ih = 0.0
-    t_bwd_dw_hh = 0.0
-    t_bwd_dx = 0.0
-    t_bwd_dh = 0.0
-    t_bwd_dbias = 0.0
+    t_bwd_lin_ih = 0.0
+    t_bwd_lin_hh = 0.0
 
     t_total_fwd = 0.0
     t_total_bwd = 0.0
@@ -108,19 +102,19 @@ def profile_lstm_breakdown(
         for t in range(seq_len):
             x_t = X_seq[t].contiguous()
 
-            # 1.1 Input GEMM
+            # 1.1 Input GEMM + Bias
             fwd_gemm_ih_ev[t][0].record()
-            G_ih = _ext.linear_forward(x_t, model.W_ih, None)
+            G_ih = _ext.linear_forward(x_t, model.W_ih, model.b_ih)
             fwd_gemm_ih_ev[t][1].record()
 
-            # 1.2 Recurrent GEMM
+            # 1.2 Recurrent GEMM + Bias
             fwd_gemm_hh_ev[t][0].record()
-            G_hh = _ext.linear_forward(cur_h, model.W_hh, None)
+            G_hh = _ext.linear_forward(cur_h, model.W_hh, model.b_hh)
             fwd_gemm_hh_ev[t][1].record()
 
-            # 1.3 Bias addition
+            # 1.3 Pre-activation addition
             fwd_bias_ev[t][0].record()
-            G_tot = G_ih + G_hh + model.b_ih + model.b_hh
+            G_tot = G_ih + G_hh
             fwd_bias_ev[t][1].record()
             G_total_list.append(G_tot)
 
@@ -179,34 +173,20 @@ def profile_lstm_breakdown(
             )
             bwd_gate_ev[t][1].record()
 
-            # 2.2 dW_ih GEMM
-            bwd_dw_ih_ev[t][0].record()
-            dW_ih_t, db_ih_t, _ = _ext.linear_backward(dG_tot, x_t, model.W_ih, False)
+            # 2.2 Input Linear Backward (dW_ih, db_ih, dX)
+            bwd_lin_ih_ev[t][0].record()
+            dW_ih_t, db_ih_t, dX_t = _ext.linear_backward(dG_tot, x_t, model.W_ih, True)
             dW_ih += dW_ih_t
-            bwd_dw_ih_ev[t][1].record()
-
-            # 2.3 dX GEMM
-            bwd_dx_ev[t][0].record()
-            _, _, dX_t = _ext.linear_backward(dG_tot, x_t, model.W_ih, True)
-            dX_seq[t] = dX_t
-            bwd_dx_ev[t][1].record()
-
-            # 2.4 dW_hh GEMM
-            bwd_dw_hh_ev[t][0].record()
-            dW_hh_t, db_hh_t, _ = _ext.linear_backward(dG_tot, h_prev, model.W_hh, False)
-            dW_hh += dW_hh_t
-            bwd_dw_hh_ev[t][1].record()
-
-            # 2.5 dH GEMM
-            bwd_dh_ev[t][0].record()
-            _, _, dh_next = _ext.linear_backward(dG_tot, h_prev, model.W_hh, True)
-            bwd_dh_ev[t][1].record()
-
-            # 2.6 Bias reductions
-            bwd_dbias_ev[t][0].record()
             db_ih += db_ih_t
+            dX_seq[t] = dX_t
+            bwd_lin_ih_ev[t][1].record()
+
+            # 2.3 Recurrent Linear Backward (dW_hh, db_hh, dh_next)
+            bwd_lin_hh_ev[t][0].record()
+            dW_hh_t, db_hh_t, dh_next = _ext.linear_backward(dG_tot, h_prev, model.W_hh, True)
+            dW_hh += dW_hh_t
             db_hh += db_hh_t
-            bwd_dbias_ev[t][1].record()
+            bwd_lin_hh_ev[t][1].record()
 
         stop_total_ev.record()
         torch.cuda.synchronize()
@@ -215,11 +195,8 @@ def profile_lstm_breakdown(
         # Collect Backward component timings
         for t in range(seq_len):
             t_bwd_gate += bwd_gate_ev[t][0].elapsed_time(bwd_gate_ev[t][1])
-            t_bwd_dw_ih += bwd_dw_ih_ev[t][0].elapsed_time(bwd_dw_ih_ev[t][1])
-            t_bwd_dw_hh += bwd_dw_hh_ev[t][0].elapsed_time(bwd_dw_hh_ev[t][1])
-            t_bwd_dx += bwd_dx_ev[t][0].elapsed_time(bwd_dx_ev[t][1])
-            t_bwd_dh += bwd_dh_ev[t][0].elapsed_time(bwd_dh_ev[t][1])
-            t_bwd_dbias += bwd_dbias_ev[t][0].elapsed_time(bwd_dbias_ev[t][1])
+            t_bwd_lin_ih += bwd_lin_ih_ev[t][0].elapsed_time(bwd_lin_ih_ev[t][1])
+            t_bwd_lin_hh += bwd_lin_hh_ev[t][0].elapsed_time(bwd_lin_hh_ev[t][1])
 
     # Average metrics per iteration
     fwd_gemm_ih = t_fwd_gemm_ih / num_runs
@@ -229,18 +206,15 @@ def profile_lstm_breakdown(
     total_fwd = t_total_fwd / num_runs
 
     bwd_gate = t_bwd_gate / num_runs
-    bwd_dw_ih = t_bwd_dw_ih / num_runs
-    bwd_dw_hh = t_bwd_dw_hh / num_runs
-    bwd_dx = t_bwd_dx / num_runs
-    bwd_dh = t_bwd_dh / num_runs
-    bwd_dbias = t_bwd_dbias / num_runs
+    bwd_lin_ih = t_bwd_lin_ih / num_runs
+    bwd_lin_hh = t_bwd_lin_hh / num_runs
     total_bwd = t_total_bwd / num_runs
 
     # Unaccounted overhead (Host dispatch / kernel launch latency / sync)
     fwd_kernels_sum = fwd_gemm_ih + fwd_gemm_hh + fwd_bias + fwd_gate
     fwd_overhead = max(0.0, total_fwd - fwd_kernels_sum)
 
-    bwd_kernels_sum = bwd_gate + bwd_dw_ih + bwd_dw_hh + bwd_dx + bwd_dh + bwd_dbias
+    bwd_kernels_sum = bwd_gate + bwd_lin_ih + bwd_lin_hh
     bwd_overhead = max(0.0, total_bwd - bwd_kernels_sum)
 
     grand_total = total_fwd + total_bwd
@@ -253,24 +227,21 @@ def profile_lstm_breakdown(
 
     # 1. FORWARD TABLE
     print(f"▶ FORWARD PASS (Total = {total_fwd:.3f} ms)")
-    print(f"  • Input GEMM (X * W_ih)                  | {fwd_gemm_ih:>9.3f} ms | {fwd_gemm_ih/total_fwd*100:>10.1f}% | {fwd_gemm_ih/grand_total*100:>10.1f}%")
-    print(f"  • Recurrent GEMM (H_prev * W_hh)          | {fwd_gemm_hh:>9.3f} ms | {fwd_gemm_hh/total_fwd*100:>10.1f}% | {fwd_gemm_hh/grand_total*100:>10.1f}%")
-    print(f"  • Bias Addition & Gate Sums               | {fwd_bias:>9.3f} ms | {fwd_bias/total_fwd*100:>10.1f}% | {fwd_bias/grand_total*100:>10.1f}%")
-    print(f"  • Fused Gate Forward Kernel (i,f,g,o,c,h) | {fwd_gate:>9.3f} ms | {fwd_gate/total_fwd*100:>10.1f}% | {fwd_gate/grand_total*100:>10.1f}%")
-    print(f"  • Launch / Python Loop Overhead           | {fwd_overhead:>9.3f} ms | {fwd_overhead/total_fwd*100:>10.1f}% | {fwd_overhead/grand_total*100:>10.1f}%")
+    print(f"  • Input GEMM (X * W_ih + b_ih)           | {fwd_gemm_ih:>9.3f} ms | {fwd_gemm_ih/total_fwd*100:>10.1f}% | {fwd_gemm_ih/grand_total*100:>10.1f}%")
+    print(f"  • Recurrent GEMM (H_prev * W_hh + b_hh)  | {fwd_gemm_hh:>9.3f} ms | {fwd_gemm_hh/total_fwd*100:>10.1f}% | {fwd_gemm_hh/grand_total*100:>10.1f}%")
+    print(f"  • Pre-activation Sum (G_ih + G_hh)        | {fwd_bias:>9.3f} ms | {fwd_bias/total_fwd*100:>10.1f}% | {fwd_bias/grand_total*100:>10.1f}%")
+    print(f"  • Fused Gate Forward Kernel (i,f,g,o,c,h)| {fwd_gate:>9.3f} ms | {fwd_gate/total_fwd*100:>10.1f}% | {fwd_gate/grand_total*100:>10.1f}%")
+    print(f"  • Launch / Python Loop Overhead          | {fwd_overhead:>9.3f} ms | {fwd_overhead/total_fwd*100:>10.1f}% | {fwd_overhead/grand_total*100:>10.1f}%")
     print("-" * 80)
 
     # 2. BACKWARD TABLE
     print(f"▶ BACKWARD PASS (BPTT) (Total = {total_bwd:.3f} ms)")
     print(f"  • Fused Gate Backward Kernel (dG, dc_prev)| {bwd_gate:>9.3f} ms | {bwd_gate/total_bwd*100:>10.1f}% | {bwd_gate/grand_total*100:>10.1f}%")
-    print(f"  • dW_ih GEMM Accumulation (X^T * dG)      | {bwd_dw_ih:>9.3f} ms | {bwd_dw_ih/total_bwd*100:>10.1f}% | {bwd_dw_ih/grand_total*100:>10.1f}%")
-    print(f"  • dW_hh GEMM Accumulation (H^T * dG)      | {bwd_dw_hh:>9.3f} ms | {bwd_dw_hh/total_bwd*100:>10.1f}% | {bwd_dw_hh/grand_total*100:>10.1f}%")
-    print(f"  • dX Data Gradient GEMM (dG * W_ih^T)     | {bwd_dx:>9.3f} ms | {bwd_dx/total_bwd*100:>10.1f}% | {bwd_dx/grand_total*100:>10.1f}%")
-    print(f"  • dH Recurrent Gradient GEMM (dG * W_hh^T)| {bwd_dh:>9.3f} ms | {bwd_dh/total_bwd*100:>10.1f}% | {bwd_dh/grand_total*100:>10.1f}%")
-    print(f"  • Bias Reductions (db_ih, db_hh)          | {bwd_dbias:>9.3f} ms | {bwd_dbias/total_bwd*100:>10.1f}% | {bwd_dbias/grand_total*100:>10.1f}%")
-    print(f"  • Launch / Python Loop Overhead           | {bwd_overhead:>9.3f} ms | {bwd_overhead/total_bwd*100:>10.1f}% | {bwd_overhead/grand_total*100:>10.1f}%")
+    print(f"  • Input Linear Backward (dW_ih, db_ih, dX)| {bwd_lin_ih:>9.3f} ms | {bwd_lin_ih/total_bwd*100:>10.1f}% | {bwd_lin_ih/grand_total*100:>10.1f}%")
+    print(f"  • Recurrent Backward (dW_hh, db_hh, dH)   | {bwd_lin_hh:>9.3f} ms | {bwd_lin_hh/total_bwd*100:>10.1f}% | {bwd_lin_hh/grand_total*100:>10.1f}%")
+    print(f"  • Launch / Python Loop Overhead          | {bwd_overhead:>9.3f} ms | {bwd_overhead/total_bwd*100:>10.1f}% | {bwd_overhead/grand_total*100:>10.1f}%")
     print("=" * 80)
-    print(f"  ★ GRAND TOTAL STEP TIME                   | {grand_total:>9.3f} ms | {'100.0%':>11} | {'100.0%':>11}")
+    print(f"  ★ GRAND TOTAL STEP TIME                  | {grand_total:>9.3f} ms | {'100.0%':>11} | {'100.0%':>11}")
     print("=" * 80 + "\n")
 
 

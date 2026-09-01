@@ -120,8 +120,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_lstm_gates_backward", &fused_lstm_gates_backward, "Fused LSTM Gates Backward (CUDA)");
 
     // 4. Linear & GEMMs
-    m.def("linear_forward", &linear_forward, "2D Tiled Shared-Memory GEMM Forward (CUDA)");
-    m.def("linear_backward", &linear_backward, "2D Tiled Shared-Memory GEMM Backward (CUDA)");
+    m.def("linear_forward", &linear_forward, "2D Tiled Shared-Memory GEMM Forward (CUDA)",
+          py::arg("A"), py::arg("B"), py::arg("bias") = torch::Tensor());
+    m.def("linear_backward", &linear_backward, "2D Tiled Shared-Memory GEMM Backward (CUDA)",
+          py::arg("dY"), py::arg("A"), py::arg("B"), py::arg("compute_dX") = true);
 
     // 5. Loss
     m.def("softmax_cross_entropy", &softmax_cross_entropy, "Sequence Softmax & Cross-Entropy Loss with Warp Reductions (CUDA)");

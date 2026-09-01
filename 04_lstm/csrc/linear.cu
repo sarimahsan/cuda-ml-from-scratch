@@ -175,7 +175,7 @@ torch::Tensor linear_forward(
     int N = B.size(1);
 
     auto Out = torch::empty({M, N}, A.options());
-    const float* bias_ptr = bias.defined() ? bias.data_ptr<float>() : nullptr;
+    const float* bias_ptr = (bias.defined() && bias.numel() > 0) ? bias.data_ptr<float>() : nullptr;
 
     dim3 block(TILE_DIM, TILE_DIM);
     dim3 grid((N + TILE_DIM - 1) / TILE_DIM, (M + TILE_DIM - 1) / TILE_DIM);
