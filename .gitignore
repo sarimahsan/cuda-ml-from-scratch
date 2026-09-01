@@ -1,7 +1,10 @@
-# Explicit user ignore
-BACKPROPAGATION.md
-backprop.md
-*backprop*.md
+# Markdown files - ignore all except READMEs
+*.md
+**/*.md
+!README.md
+!**/README.md
+!readme.md
+!**/readme.md
 
 # Python
 __pycache__/

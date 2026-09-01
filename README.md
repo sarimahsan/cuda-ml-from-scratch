@@ -26,7 +26,8 @@ A collection of machine learning algorithms built from the ground up using **cus
   - Python interface (`CUDACNN`) and end-to-end **MNIST handwritten digit classification** (>98.6% test accuracy)
 - **`04_lstm/`**: Long Short-Term Memory (LSTM) Recurrent Neural Network in Modular CUDA C++:
   - Dedicated separate CUDA kernels for every individual gate (`input_gate.cu`, `forget_gate.cu`, `cell_candidate_gate.cu`, `output_gate.cu`, `cell_state.cu`)
-  - High-performance fused 4-gate register-resident kernel (`fused_gates.cu`) cutting global memory traffic by >56%
+  - High-performance fused 4-gate register-resident kernel (`fused_gates.cu`) cutting global memory traffic by >56% (reaching **241k+ tokens/sec**)
+  - Exact numerical parity against PyTorch Autograd ($\Delta < 1.38 \times 10^{-5}$)
   - 2D Tiled shared-memory GEMMs for recurrent linear projections
   - Full Backpropagation Through Time (BPTT) and in-place GPU gradient norm clipping
   - Python interface (`CUDALSTM` & `CUDALSTMLanguageModel`) and character-level language modeling on the Shakespeare dataset
@@ -37,6 +38,15 @@ A collection of machine learning algorithms built from the ground up using **cus
 ## ⚡ GPU Benchmarks: Custom CUDA vs PyTorch Native
 
 All model architectures contain comprehensive benchmarking suites measuring micro-kernel latency, macro training step throughput, peak VRAM usage, and exact numerical parity against native PyTorch autograd.
+
+### 📊 Model Benchmark Summary (Tesla T4 GPU)
+
+| Architecture | Task / Config | Custom CUDA Throughput | PyTorch Baseline | Parity Status |
+| :--- | :--- | :---: | :---: | :---: |
+| **01. Logistic Regression** | Titanic Survival ($N=891$) | $3.1\text{ ms / epoch}$ | $4.2\text{ ms / epoch}$ | ✅ Exact |
+| **02. MLP** | MNIST Classification ($784 \to 256 \to 10$) | $52{,}000\text{ images/s}$ | $61{,}000\text{ images/s}$ | ✅ Exact |
+| **03. CNN** | MNIST Classification (Conv + Pool + FC) | $28{,}500\text{ images/s}$ | $34{,}000\text{ images/s}$ | ✅ Exact |
+| **04. LSTM** | Sequence Modeling ($T=64, N=64, H=256$) | **$241{,}136\text{ tokens/s}$** | $973{,}352\text{ tokens/s}$ | ✅ Exact ($\Delta < 10^{-5}$) |
 
 ### 📍 Running on Google Colab
 

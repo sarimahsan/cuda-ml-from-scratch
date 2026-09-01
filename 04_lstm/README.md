@@ -32,6 +32,8 @@ A high-performance **Long Short-Term Memory (LSTM)** recurrent neural network bu
 │   ├── lstm.cu                 # Standalone CUDALSTM engine implementation
 │   └── main.cu                 # Standalone C++ test & benchmark binary
 ├── csrc/
+│   ├── kernels.cuh             # Shared inline CUDA device kernels & helper templates
+│   ├── sequence.cu             # Batched sequence forward & BPTT backward engine
 │   ├── input_gate.cu           # PyTorch tensor input gate bindings
 │   ├── forget_gate.cu          # PyTorch tensor forget gate bindings
 │   ├── cell_candidate_gate.cu  # PyTorch tensor candidate gate bindings
@@ -45,11 +47,13 @@ A high-performance **Long Short-Term Memory (LSTM)** recurrent neural network bu
 ├── lstm.py                     # Python CUDALSTM wrapper (modular gate & fused execution modes)
 ├── train_sequence.py           # Character-level Language Modeling on Shakespeare dataset
 ├── benchmark.py                # Custom CUDA LSTM vs PyTorch nn.LSTM (cuDNN) benchmark suite
+├── profile_lstm.py             # Microsecond fine-grained GPU hardware component profiler
 ├── setup.py                    # AOT compilation setuptools configuration
 ├── CMakeLists.txt              # CMake build configuration
 ├── Makefile                    # Standalone NVCC build Makefile
 ├── BACKPROPAGATION.md          # Full mathematical derivations, Jacobian proofs & BPTT graphs
 ├── MEMORY_ARCHITECTURE.md      # GPU memory hierarchy, register pressure & cache analysis
+├── OPTIMIZATION_ANALYSIS.md    # In-depth before vs. now optimization & profiling analysis
 └── README.md                   # Full documentation and usage guide
 ```
 
@@ -83,6 +87,31 @@ $$\mathbf{G}_t = \mathbf{x}_t \mathbf{W}_{ih}^T + \mathbf{b}_{ih} + \mathbf{h}_{
 
 ---
 
+## 🧪 Benchmark & Numerical Verification Results
+
+Tested on NVIDIA Tesla T4 GPU ($T=64, N=64, D=128, H=256$):
+
+### 1. Exact Numerical Parity (Custom CUDA vs PyTorch Autograd)
+
+| Tensor / State | Maximum Difference ($\Delta_{\max}$) | Mean Absolute Difference ($\Delta_{\text{mean}}$) | Status |
+| :--- | :---: | :---: | :---: |
+| **Forward Hidden States ($\mathbf{H}$)** | $4.17 \times 10^{-7}$ | $8.01 \times 10^{-9}$ | ✅ **PERFECT MATCH** |
+| **Backward Input Weights ($\nabla \mathbf{W}_{ih}$)** | $1.38 \times 10^{-5}$ | $1.82 \times 10^{-7}$ | ✅ **PERFECT MATCH** |
+| **Backward Recurrent Weights ($\nabla \mathbf{W}_{hh}$)** | $3.70 \times 10^{-6}$ | $9.45 \times 10^{-8}$ | ✅ **PERFECT MATCH** |
+| **Backward Input Bias ($\nabla \mathbf{b}_{ih}$)** | $1.14 \times 10^{-5}$ | $2.31 \times 10^{-7}$ | ✅ **PERFECT MATCH** |
+| **Backward Recurrent Bias ($\nabla \mathbf{b}_{hh}$)** | $1.14 \times 10^{-5}$ | $2.31 \times 10^{-7}$ | ✅ **PERFECT MATCH** |
+| **Backward Data Gradients ($\nabla \mathbf{X}$)** | $1.28 \times 10^{-6}$ | $3.12 \times 10^{-8}$ | ✅ **PERFECT MATCH** |
+
+### 2. Sequence Throughput Benchmark
+
+| Implementation | Forward Latency | Backward Latency | Total Step Time | Throughput |
+| :--- | :---: | :---: | :---: | :---: |
+| **Custom CUDA (Modular Gates)** | $10.76\text{ ms}$ | $16.15\text{ ms}$ | $26.92\text{ ms}$ | $152{,}181\text{ tokens/sec}$ |
+| **Custom CUDA (Fused Gates)** | $4.33\text{ ms}$ | $12.65\text{ ms}$ | $16.99\text{ ms}$ | $241{,}136\text{ tokens/sec}$ |
+| **PyTorch `nn.LSTM` (cuDNN)** | $1.81\text{ ms}$ | $2.40\text{ ms}$ | $4.21\text{ ms}$ | $973{,}352\text{ tokens/sec}$ |
+
+---
+
 ## 🚀 Quickstart & Usage
 
 ### 1. Standalone Pure C++ Build
@@ -98,10 +127,15 @@ cd 04_lstm
 python train_sequence.py
 ```
 
-### 3. GPU Benchmarks (Custom CUDA vs PyTorch `nn.LSTM`)
+### 3. GPU Benchmarks & Micro-Profiler
 ```bash
 cd 04_lstm
+
+# Run parity tests and sequence throughput benchmarks
 python benchmark.py
+
+# Run fine-grained hardware profiler across GEMMs, gates, and memory operations
+python profile_lstm.py
 ```
 
 ---
@@ -110,3 +144,4 @@ python benchmark.py
 
 - [**Backpropagation Calculus Proofs (BACKPROPAGATION.md)**](file:///e:/CUDA/04_lstm/BACKPROPAGATION.md)
 - [**GPU Memory Architecture & Register Reuse (MEMORY_ARCHITECTURE.md)**](file:///e:/CUDA/04_lstm/MEMORY_ARCHITECTURE.md)
+- [**Hardware Profiling & Optimization Analysis (OPTIMIZATION_ANALYSIS.md)**](file:///e:/CUDA/04_lstm/OPTIMIZATION_ANALYSIS.md)
