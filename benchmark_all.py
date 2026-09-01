@@ -78,9 +78,9 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        choices=["all", "logistic", "mlp", "cnn"],
+        choices=["all", "logistic", "mlp", "cnn", "lstm"],
         default="all",
-        help="Which model benchmark to execute (logistic, mlp, cnn, or all)",
+        help="Which model benchmark to execute (logistic, mlp, cnn, lstm, or all)",
     )
     parser.add_argument("--quick", action="store_true", help="Execute faster benchmarks with reduced iterations")
     parser.add_argument("--device", type=str, default="cuda", help="Target device (default: cuda)")
@@ -103,6 +103,9 @@ def main():
 
     if args.model in ["all", "cnn"]:
         run_benchmark("03_cnn", "benchmark.py", extra_args)
+
+    if args.model in ["all", "lstm"]:
+        run_benchmark("04_lstm", "benchmark.py", extra_args)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,12 @@ A collection of machine learning algorithms built from the ground up using **cus
   - 2D Max Pooling forward kernel with argmax mask retention and exact backward subgradient routing
   - Tiled shared-memory GEMM fully connected layers
   - Python interface (`CUDACNN`) and end-to-end **MNIST handwritten digit classification** (>98.6% test accuracy)
+- **`04_lstm/`**: Long Short-Term Memory (LSTM) Recurrent Neural Network in Modular CUDA C++:
+  - Dedicated separate CUDA kernels for every individual gate (`input_gate.cu`, `forget_gate.cu`, `cell_candidate_gate.cu`, `output_gate.cu`, `cell_state.cu`)
+  - High-performance fused 4-gate register-resident kernel (`fused_gates.cu`) cutting global memory traffic by >56%
+  - 2D Tiled shared-memory GEMMs for recurrent linear projections
+  - Full Backpropagation Through Time (BPTT) and in-place GPU gradient norm clipping
+  - Python interface (`CUDALSTM` & `CUDALSTMLanguageModel`) and character-level language modeling on the Shakespeare dataset
 - **`benchmark_all.py`**: Unified Master GPU Benchmark Suite comparing custom CUDA C++ implementations against PyTorch Native baselines.
 
 ---
@@ -47,5 +53,6 @@ All model architectures contain comprehensive benchmarking suites measuring micr
 !python benchmark_all.py --model logistic
 !python benchmark_all.py --model mlp
 !python benchmark_all.py --model cnn
+!python benchmark_all.py --model lstm
 ```
 
