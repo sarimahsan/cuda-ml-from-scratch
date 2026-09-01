@@ -97,6 +97,8 @@ void sgd_momentum_step(
 void clip_grad_norm(
     std::vector<torch::Tensor> grads,
     float max_norm
+);
+
 // Fast C++ Sequence Module
 std::vector<torch::Tensor> lstm_forward_sequence_fast(
     torch::Tensor X_seq,

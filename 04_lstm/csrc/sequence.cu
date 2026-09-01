@@ -1,59 +1,7 @@
 #include <torch/extension.h>
 #include <cuda_runtime.h>
 #include <vector>
-
-#define TILE_DIM 16
-
-// Device prototypes
-__global__ void gemm_forward_kernel_torch(
-    const float* __restrict__ d_A,
-    const float* __restrict__ d_B,
-    const float* __restrict__ d_bias,
-    float* __restrict__ d_Out,
-    int M, int K, int N
-);
-
-__global__ void gemm_backward_weights_kernel_torch(
-    const float* __restrict__ d_A,
-    const float* __restrict__ d_dY,
-    float* __restrict__ d_dW,
-    int M, int K, int N
-);
-
-__global__ void gemm_backward_data_kernel_torch(
-    const float* __restrict__ d_dY,
-    const float* __restrict__ d_W,
-    float* __restrict__ d_dX,
-    int M, int K, int N
-);
-
-__global__ void gemm_backward_bias_kernel_torch(
-    const float* __restrict__ d_dY,
-    float* __restrict__ d_db,
-    int M, int N
-);
-
-__global__ void fused_lstm_gates_forward_kernel_torch(
-    const float* __restrict__ d_gates_preact,
-    const float* __restrict__ d_c_prev,
-    float* __restrict__ d_gates_act,
-    float* __restrict__ d_c_next,
-    float* __restrict__ d_tanh_c,
-    float* __restrict__ d_h_next,
-    int N, int H
-);
-
-__global__ void fused_lstm_gates_backward_kernel_torch(
-    const float* __restrict__ d_dh,
-    const float* __restrict__ d_dc_next,
-    const float* __restrict__ d_gates_act,
-    const float* __restrict__ d_c_prev,
-    const float* __restrict__ d_c_next,
-    const float* __restrict__ d_tanh_c,
-    float* __restrict__ d_dgates_preact,
-    float* __restrict__ d_dc_prev,
-    int N, int H
-);
+#include "kernels.cuh"
 
 // Fast fused addition: G_total = G_ih + G_hh + b_hh
 __global__ void add_fused_gates_kernel(
