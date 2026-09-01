@@ -285,10 +285,10 @@ class CUDALSTM:
             dh_curr = dH_seq[t] + dh_next
 
             if self.mode == "modular":
-                i_val = g_act[:, :H]
-                f_val = g_act[:, H : 2 * H]
-                g_val = g_act[:, 2 * H : 3 * H]
-                o_val = g_act[:, 3 * H : 4 * H]
+                i_val = g_act[:, :H].contiguous()
+                f_val = g_act[:, H : 2 * H].contiguous()
+                g_val = g_act[:, 2 * H : 3 * H].contiguous()
+                o_val = g_act[:, 3 * H : 4 * H].contiguous()
 
                 dc_prev, df, di, dg, do_t = _ext.cell_state_backward(
                     dh_curr, dc_next, o_val, tanh_c, c_prev, f_val, i_val, g_val
