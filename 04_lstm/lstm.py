@@ -47,6 +47,7 @@ sources = [
     os.path.join(current_dir, "csrc", "linear.cu"),
     os.path.join(current_dir, "csrc", "softmax_loss.cu"),
     os.path.join(current_dir, "csrc", "optimizers.cu"),
+    os.path.join(current_dir, "csrc", "sequence.cu"),
 ]
 
 try:
@@ -195,6 +196,22 @@ class CUDALSTM:
         if c_0 is None:
             c_0 = torch.zeros(N, H, device=self.device)
 
+        if self.mode == "fused" and hasattr(_ext, "lstm_forward_sequence_fast"):
+            H_seq, h_T, c_T, C_seq, G_act_seq, Tanh_C_seq, G_ih_all = _ext.lstm_forward_sequence_fast(
+                X_seq.contiguous(), self.W_ih, self.b_ih, self.W_hh, self.b_hh, h_0.contiguous(), c_0.contiguous()
+            )
+            cache = {
+                "mode": "fused",
+                "X_seq": X_seq,
+                "h_0": h_0,
+                "H_seq": H_seq,
+                "C_seq": C_seq,
+                "G_act_seq": G_act_seq,
+                "Tanh_C_seq": Tanh_C_seq,
+            }
+            return H_seq, (h_T, c_T), cache
+
+        # Modular step-by-step fallback
         H_list = [h_0]
         C_list = [c_0]
         G_total_list = []
@@ -237,6 +254,7 @@ class CUDALSTM:
 
         out_H = torch.stack(H_list[1:], dim=0)
         cache = {
+            "mode": "modular",
             "X_seq": X_seq,
             "H_list": H_list,
             "C_list": C_list,
@@ -256,6 +274,21 @@ class CUDALSTM:
         Returns:
             dW_ih, db_ih, dW_hh, db_hh, dX_seq
         """
+        if cache.get("mode") == "fused" and hasattr(_ext, "lstm_backward_sequence_fast"):
+            dW_ih, db_ih, dW_hh, db_hh, dX_seq = _ext.lstm_backward_sequence_fast(
+                dH_seq.contiguous(),
+                cache["X_seq"].contiguous(),
+                self.W_ih,
+                self.W_hh,
+                cache["h_0"].contiguous(),
+                cache["H_seq"].contiguous(),
+                cache["C_seq"].contiguous(),
+                cache["G_act_seq"].contiguous(),
+                cache["Tanh_C_seq"].contiguous(),
+            )
+            return dW_ih, db_ih, dW_hh, db_hh, dX_seq
+
+        # Modular step-by-step backward fallback
         X_seq = cache["X_seq"]
         H_list = cache["H_list"]
         C_list = cache["C_list"]

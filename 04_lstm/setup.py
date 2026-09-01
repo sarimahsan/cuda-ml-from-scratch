@@ -15,6 +15,7 @@ sources = [
     os.path.join(current_dir, "csrc", "linear.cu"),
     os.path.join(current_dir, "csrc", "softmax_loss.cu"),
     os.path.join(current_dir, "csrc", "optimizers.cu"),
+    os.path.join(current_dir, "csrc", "sequence.cu"),
 ]
 
 setup(

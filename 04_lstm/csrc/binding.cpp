@@ -97,10 +97,31 @@ void sgd_momentum_step(
 void clip_grad_norm(
     std::vector<torch::Tensor> grads,
     float max_norm
+// Fast C++ Sequence Module
+std::vector<torch::Tensor> lstm_forward_sequence_fast(
+    torch::Tensor X_seq,
+    torch::Tensor W_ih,
+    torch::Tensor b_ih,
+    torch::Tensor W_hh,
+    torch::Tensor b_hh,
+    torch::Tensor h_0,
+    torch::Tensor c_0
+);
+
+std::vector<torch::Tensor> lstm_backward_sequence_fast(
+    torch::Tensor dH_seq,
+    torch::Tensor X_seq,
+    torch::Tensor W_ih,
+    torch::Tensor W_hh,
+    torch::Tensor h_0,
+    torch::Tensor H_seq,
+    torch::Tensor C_seq,
+    torch::Tensor G_act_seq,
+    torch::Tensor Tanh_C_seq
 );
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.doc() = "Modular Pure CUDA LSTM Extension with Separate Gate Kernels & Fused Operators";
+    m.doc() = "Modular Pure CUDA LSTM Extension with Separate Gate Kernels, Fused Operators & Fast C++ Sequence Engine";
 
     // 1. Dedicated Individual Gate functions
     m.def("input_gate_forward", &input_gate_forward, "Input Gate Forward (CUDA)");
@@ -132,10 +153,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gemm_backward_bias", &gemm_backward_bias, "GEMM Backward db (CUDA)");
     m.def("gemm_backward_data", &gemm_backward_data, "GEMM Backward dX (CUDA)");
 
-    // 5. Loss
+    // 5. Native Fast C++ Sequence Execution
+    m.def("lstm_forward_sequence_fast", &lstm_forward_sequence_fast, "Fast Native C++ LSTM Sequence Forward (CUDA)");
+    m.def("lstm_backward_sequence_fast", &lstm_backward_sequence_fast, "Fast Native C++ LSTM Sequence Backward (CUDA)");
+
+    // 6. Loss
     m.def("softmax_cross_entropy", &softmax_cross_entropy, "Sequence Softmax & Cross-Entropy Loss with Warp Reductions (CUDA)");
 
-    // 6. Optimizers & Clipping
+    // 7. Optimizers & Clipping
     m.def("adam_step", &adam_step, "Vectorized In-Place Adam Step (CUDA)");
     m.def("sgd_momentum_step", &sgd_momentum_step, "Vectorized In-Place SGD Momentum Step (CUDA)");
     m.def("clip_grad_norm", &clip_grad_norm, "GPU In-Place Gradient Norm Clipping (CUDA)");
