@@ -63,6 +63,10 @@ std::vector<torch::Tensor> linear_backward(
     bool compute_dX
 );
 
+torch::Tensor gemm_backward_weights(torch::Tensor A, torch::Tensor dY);
+torch::Tensor gemm_backward_bias(torch::Tensor dY);
+torch::Tensor gemm_backward_data(torch::Tensor dY, torch::Tensor W);
+
 // Softmax Cross Entropy module
 std::vector<torch::Tensor> softmax_cross_entropy(
     torch::Tensor logits,
@@ -124,6 +128,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("A"), py::arg("B"), py::arg("bias") = torch::Tensor());
     m.def("linear_backward", &linear_backward, "2D Tiled Shared-Memory GEMM Backward (CUDA)",
           py::arg("dY"), py::arg("A"), py::arg("B"), py::arg("compute_dX") = true);
+    m.def("gemm_backward_weights", &gemm_backward_weights, "GEMM Backward dW (CUDA)");
+    m.def("gemm_backward_bias", &gemm_backward_bias, "GEMM Backward db (CUDA)");
+    m.def("gemm_backward_data", &gemm_backward_data, "GEMM Backward dX (CUDA)");
 
     // 5. Loss
     m.def("softmax_cross_entropy", &softmax_cross_entropy, "Sequence Softmax & Cross-Entropy Loss with Warp Reductions (CUDA)");
@@ -133,3 +140,4 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("sgd_momentum_step", &sgd_momentum_step, "Vectorized In-Place SGD Momentum Step (CUDA)");
     m.def("clip_grad_norm", &clip_grad_norm, "GPU In-Place Gradient Norm Clipping (CUDA)");
 }
+

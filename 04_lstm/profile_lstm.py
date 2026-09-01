@@ -1,19 +1,20 @@
 """
 =============================================================================
-Modular Pure CUDA LSTM: In-Depth Microsecond Kernel Profiler
+Modular Pure CUDA LSTM: Microsecond Fine-Grained Component Profiler
 =============================================================================
-Breaks down where time is actually spent across both Forward and Backward
-passes into exact sub-operation categories:
-  - Input GEMM (X * W_ih)
-  - Recurrent GEMM (H_prev * W_hh)
-  - Fused Gate Elementwise Forward (i, f, g, o, c_t, h_t)
-  - Fused Gate Elementwise Backward (dh -> dG, dc_prev)
-  - dW_ih GEMM Accumulation (X^T * dG)
-  - dW_hh GEMM Accumulation (H^T * dG)
-  - dX GEMM (dG * W_ih^T)
-  - dH Recurrent GEMM (dG * W_hh^T)
-  - Bias Gradients (db_ih, db_hh)
-  - Host-to-Device / Launch Overhead
+Isolates and profiles EVERY individual sub-operation within Forward and
+Backward passes:
+  Recurrent Backward:
+    ├── dW_hh GEMM (H_prev^T * dG)
+    ├── db_hh reduction (sum(dG))
+    ├── dH_prev GEMM (dG * W_hh^T)
+    └── accumulation / memory overhead
+  Input Backward:
+    ├── dW_ih GEMM (X_t^T * dG)
+    ├── db_ih reduction (sum(dG))
+    ├── dX GEMM (dG * W_ih^T)
+    └── accumulation / memory overhead
+  Fused Gate Backward (dG, dc_prev)
 =============================================================================
 """
 
@@ -32,35 +33,43 @@ def profile_lstm_breakdown(
     num_runs=50,
     device="cuda",
 ):
-    print("=" * 80)
-    print(" 🔬 PURE CUDA LSTM: IN-DEPTH COMPONENT-WISE RUNTIME PROFILER")
-    print("=" * 80)
+    print("=" * 85)
+    print(" 🔬 PURE CUDA LSTM: FINE-GRAINED HARDWARE KERNEL PROFILER")
+    print("=" * 85)
     print(f"• Sequence Length (T) : {seq_len}")
     print(f"• Batch Size (N)      : {batch_size}")
     print(f"• Input Dimension (D) : {input_dim}")
     print(f"• Hidden Dimension (H): {hidden_dim}")
     print(f"• Profiling Runs      : {num_runs} iterations (after {num_warmup} warmups)")
     print(f"• Device              : {torch.cuda.get_device_name(0)}")
-    print("-" * 80)
+    print("-" * 85)
 
-    # Initialize model and data
     model = CUDALSTM(input_dim, hidden_dim, mode="fused", device=device)
     X_seq = torch.randn(seq_len, batch_size, input_dim, device=device)
     grad_out = torch.randn(seq_len, batch_size, hidden_dim, device=device)
     h_0 = torch.zeros(batch_size, hidden_dim, device=device)
     c_0 = torch.zeros(batch_size, hidden_dim, device=device)
 
-    # CUDA Events for fine-grained kernel profiling
-    # Forward timers
+    # Forward CUDA Events
     fwd_gemm_ih_ev = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
     fwd_gemm_hh_ev = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
-    fwd_bias_ev    = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
+    fwd_add_ev     = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
     fwd_gate_ev    = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
 
-    # Backward timers
+    # Backward CUDA Events (Fine-grained per-kernel isolation)
     bwd_gate_ev    = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
-    bwd_lin_ih_ev  = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
-    bwd_lin_hh_ev  = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
+
+    # Recurrent Backward Events
+    bwd_dw_hh_ev   = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
+    bwd_db_hh_ev   = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
+    bwd_dh_prev_ev = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
+    bwd_acc_hh_ev  = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
+
+    # Input Backward Events
+    bwd_dw_ih_ev   = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
+    bwd_db_ih_ev   = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
+    bwd_dx_ev      = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
+    bwd_acc_ih_ev  = [(torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)) for _ in range(seq_len)]
 
     # Warmup
     for _ in range(num_warmup):
@@ -68,17 +77,24 @@ def profile_lstm_breakdown(
         model.backward_sequence(grad_out, cache)
     torch.cuda.synchronize()
 
-    # Metrics accumulators (in milliseconds)
+    # Forward Accumulators
     t_fwd_gemm_ih = 0.0
     t_fwd_gemm_hh = 0.0
-    t_fwd_bias = 0.0
+    t_fwd_add = 0.0
     t_fwd_gate = 0.0
-
-    t_bwd_gate = 0.0
-    t_bwd_lin_ih = 0.0
-    t_bwd_lin_hh = 0.0
-
     t_total_fwd = 0.0
+
+    # Backward Accumulators
+    t_bwd_gate = 0.0
+    t_bwd_dw_hh = 0.0
+    t_bwd_db_hh = 0.0
+    t_bwd_dh_prev = 0.0
+    t_bwd_acc_hh = 0.0
+
+    t_bwd_dw_ih = 0.0
+    t_bwd_db_ih = 0.0
+    t_bwd_dx = 0.0
+    t_bwd_acc_ih = 0.0
     t_total_bwd = 0.0
 
     start_total_ev = torch.cuda.Event(enable_timing=True)
@@ -92,7 +108,6 @@ def profile_lstm_breakdown(
 
         H_list = [h_0]
         C_list = [c_0]
-        G_total_list = []
         G_act_list = []
         Tanh_C_list = []
 
@@ -112,13 +127,12 @@ def profile_lstm_breakdown(
             G_hh = _ext.linear_forward(cur_h, model.W_hh, model.b_hh)
             fwd_gemm_hh_ev[t][1].record()
 
-            # 1.3 Pre-activation addition
-            fwd_bias_ev[t][0].record()
+            # 1.3 Pre-activation sum
+            fwd_add_ev[t][0].record()
             G_tot = G_ih + G_hh
-            fwd_bias_ev[t][1].record()
-            G_total_list.append(G_tot)
+            fwd_add_ev[t][1].record()
 
-            # 1.4 Fused Gate Elementwise
+            # 1.4 Fused Gate Forward
             fwd_gate_ev[t][0].record()
             next_h, next_c, g_act, tanh_c = _ext.fused_lstm_gates_forward(G_tot, cur_c)
             fwd_gate_ev[t][1].record()
@@ -135,11 +149,10 @@ def profile_lstm_breakdown(
         torch.cuda.synchronize()
         t_total_fwd += start_total_ev.elapsed_time(stop_total_ev)
 
-        # Collect Forward component timings
         for t in range(seq_len):
             t_fwd_gemm_ih += fwd_gemm_ih_ev[t][0].elapsed_time(fwd_gemm_ih_ev[t][1])
             t_fwd_gemm_hh += fwd_gemm_hh_ev[t][0].elapsed_time(fwd_gemm_hh_ev[t][1])
-            t_fwd_bias += fwd_bias_ev[t][0].elapsed_time(fwd_bias_ev[t][1])
+            t_fwd_add += fwd_add_ev[t][0].elapsed_time(fwd_add_ev[t][1])
             t_fwd_gate += fwd_gate_ev[t][0].elapsed_time(fwd_gate_ev[t][1])
 
         # ---------------------------------------------------------------------
@@ -173,80 +186,134 @@ def profile_lstm_breakdown(
             )
             bwd_gate_ev[t][1].record()
 
-            # 2.2 Input Linear Backward (dW_ih, db_ih, dX)
-            bwd_lin_ih_ev[t][0].record()
-            dW_ih_t, db_ih_t, dX_t = _ext.linear_backward(dG_tot, x_t, model.W_ih, True)
-            dW_ih += dW_ih_t
-            db_ih += db_ih_t
-            dX_seq[t] = dX_t
-            bwd_lin_ih_ev[t][1].record()
+            # 2.2 RECURRENT BACKWARD BREAKDOWN
+            # a) dW_hh GEMM: H_prev^T * dG
+            bwd_dw_hh_ev[t][0].record()
+            dW_hh_t = _ext.gemm_backward_weights(h_prev, dG_tot)
+            bwd_dw_hh_ev[t][1].record()
 
-            # 2.3 Recurrent Linear Backward (dW_hh, db_hh, dh_next)
-            bwd_lin_hh_ev[t][0].record()
-            dW_hh_t, db_hh_t, dh_next = _ext.linear_backward(dG_tot, h_prev, model.W_hh, True)
+            # b) db_hh reduction: sum(dG)
+            bwd_db_hh_ev[t][0].record()
+            db_hh_t = _ext.gemm_backward_bias(dG_tot)
+            bwd_db_hh_ev[t][1].record()
+
+            # c) dH_prev GEMM: dG * W_hh^T
+            bwd_dh_prev_ev[t][0].record()
+            dh_next = _ext.gemm_backward_data(dG_tot, model.W_hh)
+            bwd_dh_prev_ev[t][1].record()
+
+            # d) Accumulation / Memory Ops
+            bwd_acc_hh_ev[t][0].record()
             dW_hh += dW_hh_t
             db_hh += db_hh_t
-            bwd_lin_hh_ev[t][1].record()
+            bwd_acc_hh_ev[t][1].record()
+
+            # 2.3 INPUT BACKWARD BREAKDOWN
+            # a) dW_ih GEMM: X_t^T * dG
+            bwd_dw_ih_ev[t][0].record()
+            dW_ih_t = _ext.gemm_backward_weights(x_t, dG_tot)
+            bwd_dw_ih_ev[t][1].record()
+
+            # b) db_ih reduction: sum(dG)
+            bwd_db_ih_ev[t][0].record()
+            db_ih_t = _ext.gemm_backward_bias(dG_tot)
+            bwd_db_ih_ev[t][1].record()
+
+            # c) dX GEMM: dG * W_ih^T
+            bwd_dx_ev[t][0].record()
+            dX_t = _ext.gemm_backward_data(dG_tot, model.W_ih)
+            dX_seq[t] = dX_t
+            bwd_dx_ev[t][1].record()
+
+            # d) Accumulation / Memory Ops
+            bwd_acc_ih_ev[t][0].record()
+            dW_ih += dW_ih_t
+            db_ih += db_ih_t
+            bwd_acc_ih_ev[t][1].record()
 
         stop_total_ev.record()
         torch.cuda.synchronize()
         t_total_bwd += start_total_ev.elapsed_time(stop_total_ev)
 
-        # Collect Backward component timings
         for t in range(seq_len):
             t_bwd_gate += bwd_gate_ev[t][0].elapsed_time(bwd_gate_ev[t][1])
-            t_bwd_lin_ih += bwd_lin_ih_ev[t][0].elapsed_time(bwd_lin_ih_ev[t][1])
-            t_bwd_lin_hh += bwd_lin_hh_ev[t][0].elapsed_time(bwd_lin_hh_ev[t][1])
 
-    # Average metrics per iteration
+            t_bwd_dw_hh += bwd_dw_hh_ev[t][0].elapsed_time(bwd_dw_hh_ev[t][1])
+            t_bwd_db_hh += bwd_db_hh_ev[t][0].elapsed_time(bwd_db_hh_ev[t][1])
+            t_bwd_dh_prev += bwd_dh_prev_ev[t][0].elapsed_time(bwd_dh_prev_ev[t][1])
+            t_bwd_acc_hh += bwd_acc_hh_ev[t][0].elapsed_time(bwd_acc_hh_ev[t][1])
+
+            t_bwd_dw_ih += bwd_dw_ih_ev[t][0].elapsed_time(bwd_dw_ih_ev[t][1])
+            t_bwd_db_ih += bwd_db_ih_ev[t][0].elapsed_time(bwd_db_ih_ev[t][1])
+            t_bwd_dx += bwd_dx_ev[t][0].elapsed_time(bwd_dx_ev[t][1])
+            t_bwd_acc_ih += bwd_acc_ih_ev[t][0].elapsed_time(bwd_acc_ih_ev[t][1])
+
+    # Averages
     fwd_gemm_ih = t_fwd_gemm_ih / num_runs
     fwd_gemm_hh = t_fwd_gemm_hh / num_runs
-    fwd_bias = t_fwd_bias / num_runs
+    fwd_add = t_fwd_add / num_runs
     fwd_gate = t_fwd_gate / num_runs
     total_fwd = t_total_fwd / num_runs
 
     bwd_gate = t_bwd_gate / num_runs
-    bwd_lin_ih = t_bwd_lin_ih / num_runs
-    bwd_lin_hh = t_bwd_lin_hh / num_runs
+    bwd_dw_hh = t_bwd_dw_hh / num_runs
+    bwd_db_hh = t_bwd_db_hh / num_runs
+    bwd_dh_prev = t_bwd_dh_prev / num_runs
+    bwd_acc_hh = t_bwd_acc_hh / num_runs
+    recurrent_bwd_total = bwd_dw_hh + bwd_db_hh + bwd_dh_prev + bwd_acc_hh
+
+    bwd_dw_ih = t_bwd_dw_ih / num_runs
+    bwd_db_ih = t_bwd_db_ih / num_runs
+    bwd_dx = t_bwd_dx / num_runs
+    bwd_acc_ih = t_bwd_acc_ih / num_runs
+    input_bwd_total = bwd_dw_ih + bwd_db_ih + bwd_dx + bwd_acc_ih
+
     total_bwd = t_total_bwd / num_runs
 
-    # Unaccounted overhead (Host dispatch / kernel launch latency / sync)
-    fwd_kernels_sum = fwd_gemm_ih + fwd_gemm_hh + fwd_bias + fwd_gate
-    fwd_overhead = max(0.0, total_fwd - fwd_kernels_sum)
+    fwd_kernels = fwd_gemm_ih + fwd_gemm_hh + fwd_add + fwd_gate
+    fwd_overhead = max(0.0, total_fwd - fwd_kernels)
 
-    bwd_kernels_sum = bwd_gate + bwd_lin_ih + bwd_lin_hh
-    bwd_overhead = max(0.0, total_bwd - bwd_kernels_sum)
+    bwd_kernels = bwd_gate + recurrent_bwd_total + input_bwd_total
+    bwd_overhead = max(0.0, total_bwd - bwd_kernels)
 
     grand_total = total_fwd + total_bwd
 
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 85)
     print(" 📊 DETAILED BREAKDOWN OF WHERE THE TIME IS SPENT")
-    print("=" * 80)
-    print(f"{'Subsystem / Operation':<42} | {'Time (ms)':>10} | {'% of Phase':>11} | {'% of Total':>11}")
-    print("-" * 80)
+    print("=" * 85)
+    print(f"{'Subsystem / Micro-Operation':<45} | {'Time (ms)':>10} | {'% of Phase':>11} | {'% of Total':>11}")
+    print("-" * 85)
 
-    # 1. FORWARD TABLE
+    # 1. FORWARD PASS
     print(f"▶ FORWARD PASS (Total = {total_fwd:.3f} ms)")
-    print(f"  • Input GEMM (X * W_ih + b_ih)           | {fwd_gemm_ih:>9.3f} ms | {fwd_gemm_ih/total_fwd*100:>10.1f}% | {fwd_gemm_ih/grand_total*100:>10.1f}%")
-    print(f"  • Recurrent GEMM (H_prev * W_hh + b_hh)  | {fwd_gemm_hh:>9.3f} ms | {fwd_gemm_hh/total_fwd*100:>10.1f}% | {fwd_gemm_hh/grand_total*100:>10.1f}%")
-    print(f"  • Pre-activation Sum (G_ih + G_hh)        | {fwd_bias:>9.3f} ms | {fwd_bias/total_fwd*100:>10.1f}% | {fwd_bias/grand_total*100:>10.1f}%")
-    print(f"  • Fused Gate Forward Kernel (i,f,g,o,c,h)| {fwd_gate:>9.3f} ms | {fwd_gate/total_fwd*100:>10.1f}% | {fwd_gate/grand_total*100:>10.1f}%")
-    print(f"  • Launch / Python Loop Overhead          | {fwd_overhead:>9.3f} ms | {fwd_overhead/total_fwd*100:>10.1f}% | {fwd_overhead/grand_total*100:>10.1f}%")
-    print("-" * 80)
+    print(f"  • Input GEMM (X * W_ih + b_ih)              | {fwd_gemm_ih:>9.3f} ms | {fwd_gemm_ih/total_fwd*100:>10.1f}% | {fwd_gemm_ih/grand_total*100:>10.1f}%")
+    print(f"  • Recurrent GEMM (H_prev * W_hh + b_hh)     | {fwd_gemm_hh:>9.3f} ms | {fwd_gemm_hh/total_fwd*100:>10.1f}% | {fwd_gemm_hh/grand_total*100:>10.1f}%")
+    print(f"  • Pre-activation Sum (G_ih + G_hh)           | {fwd_add:>9.3f} ms | {fwd_add/total_fwd*100:>10.1f}% | {fwd_add/grand_total*100:>10.1f}%")
+    print(f"  • Fused Gate Forward Kernel (i,f,g,o,c,h)   | {fwd_gate:>9.3f} ms | {fwd_gate/total_fwd*100:>10.1f}% | {fwd_gate/grand_total*100:>10.1f}%")
+    print(f"  • Launch / Python Loop Overhead             | {fwd_overhead:>9.3f} ms | {fwd_overhead/total_fwd*100:>10.1f}% | {fwd_overhead/grand_total*100:>10.1f}%")
+    print("-" * 85)
 
-    # 2. BACKWARD TABLE
+    # 2. BACKWARD PASS
     print(f"▶ BACKWARD PASS (BPTT) (Total = {total_bwd:.3f} ms)")
-    print(f"  • Fused Gate Backward Kernel (dG, dc_prev)| {bwd_gate:>9.3f} ms | {bwd_gate/total_bwd*100:>10.1f}% | {bwd_gate/grand_total*100:>10.1f}%")
-    print(f"  • Input Linear Backward (dW_ih, db_ih, dX)| {bwd_lin_ih:>9.3f} ms | {bwd_lin_ih/total_bwd*100:>10.1f}% | {bwd_lin_ih/grand_total*100:>10.1f}%")
-    print(f"  • Recurrent Backward (dW_hh, db_hh, dH)   | {bwd_lin_hh:>9.3f} ms | {bwd_lin_hh/total_bwd*100:>10.1f}% | {bwd_lin_hh/grand_total*100:>10.1f}%")
-    print(f"  • Launch / Python Loop Overhead          | {bwd_overhead:>9.3f} ms | {bwd_overhead/total_bwd*100:>10.1f}% | {bwd_overhead/grand_total*100:>10.1f}%")
-    print("=" * 80)
-    print(f"  ★ GRAND TOTAL STEP TIME                  | {grand_total:>9.3f} ms | {'100.0%':>11} | {'100.0%':>11}")
-    print("=" * 80 + "\n")
+    print(f"  • Fused Gate Backward Kernel (dG, dc_prev)   | {bwd_gate:>9.3f} ms | {bwd_gate/total_bwd*100:>10.1f}% | {bwd_gate/grand_total*100:>10.1f}%")
+    print(f"  • [RECURRENT BACKWARD SUB-TOTAL]            | {recurrent_bwd_total:>9.3f} ms | {recurrent_bwd_total/total_bwd*100:>10.1f}% | {recurrent_bwd_total/grand_total*100:>10.1f}%")
+    print(f"    ├── dW_hh GEMM (H_prev^T * dG)            | {bwd_dw_hh:>9.3f} ms | {bwd_dw_hh/total_bwd*100:>10.1f}% | {bwd_dw_hh/grand_total*100:>10.1f}%")
+    print(f"    ├── db_hh reduction (sum(dG))             | {bwd_db_hh:>9.3f} ms | {bwd_db_hh/total_bwd*100:>10.1f}% | {bwd_db_hh/grand_total*100:>10.1f}%")
+    print(f"    ├── dH_prev GEMM (dG * W_hh^T)            | {bwd_dh_prev:>9.3f} ms | {bwd_dh_prev/total_bwd*100:>10.1f}% | {bwd_dh_prev/grand_total*100:>10.1f}%")
+    print(f"    └── Accumulation & Memory Ops (+=)        | {bwd_acc_hh:>9.3f} ms | {bwd_acc_hh/total_bwd*100:>10.1f}% | {bwd_acc_hh/grand_total*100:>10.1f}%")
+    print(f"  • [INPUT BACKWARD SUB-TOTAL]                | {input_bwd_total:>9.3f} ms | {input_bwd_total/total_bwd*100:>10.1f}% | {input_bwd_total/grand_total*100:>10.1f}%")
+    print(f"    ├── dW_ih GEMM (X_t^T * dG)               | {bwd_dw_ih:>9.3f} ms | {bwd_dw_ih/total_bwd*100:>10.1f}% | {bwd_dw_ih/grand_total*100:>10.1f}%")
+    print(f"    ├── db_ih reduction (sum(dG))             | {bwd_db_ih:>9.3f} ms | {bwd_db_ih/total_bwd*100:>10.1f}% | {bwd_db_ih/grand_total*100:>10.1f}%")
+    print(f"    ├── dX Data Gradient GEMM (dG * W_ih^T)   | {bwd_dx:>9.3f} ms | {bwd_dx/total_bwd*100:>10.1f}% | {bwd_dx/grand_total*100:>10.1f}%")
+    print(f"    └── Accumulation & Memory Ops (+=)        | {bwd_acc_ih:>9.3f} ms | {bwd_acc_ih/total_bwd*100:>10.1f}% | {bwd_acc_ih/grand_total*100:>10.1f}%")
+    print(f"  • Launch / Python Loop Overhead             | {bwd_overhead:>9.3f} ms | {bwd_overhead/total_bwd*100:>10.1f}% | {bwd_overhead/grand_total*100:>10.1f}%")
+    print("=" * 85)
+    print(f"  ★ GRAND TOTAL STEP TIME                     | {grand_total:>9.3f} ms | {'100.0%':>11} | {'100.0%':>11}")
+    print("=" * 85 + "\n")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Detailed Component-Wise CUDA LSTM Profiler")
+    parser = argparse.ArgumentParser(description="Microsecond Fine-Grained CUDA LSTM Profiler")
     parser.add_argument("--seq_len", type=int, default=64, help="Sequence Length T (default: 64)")
     parser.add_argument("--batch_size", type=int, default=64, help="Batch Size N (default: 64)")
     parser.add_argument("--input_dim", type=int, default=128, help="Input Dim D (default: 128)")

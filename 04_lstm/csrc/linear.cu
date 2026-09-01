@@ -185,6 +185,50 @@ torch::Tensor linear_forward(
     return Out;
 }
 
+torch::Tensor gemm_backward_weights(torch::Tensor A, torch::Tensor dY) {
+    TORCH_CHECK(dY.is_cuda() && A.is_cuda(), "Inputs must be CUDA tensors");
+    int M = A.size(0);
+    int K = A.size(1);
+    int N = dY.size(1);
+
+    auto dW = torch::empty({K, N}, A.options());
+    dim3 block(TILE_DIM, TILE_DIM);
+    dim3 grid_w((N + TILE_DIM - 1) / TILE_DIM, (K + TILE_DIM - 1) / TILE_DIM);
+    gemm_backward_weights_kernel_torch<<<grid_w, block>>>(
+        A.data_ptr<float>(), dY.data_ptr<float>(), dW.data_ptr<float>(), M, K, N
+    );
+    return dW;
+}
+
+torch::Tensor gemm_backward_bias(torch::Tensor dY) {
+    TORCH_CHECK(dY.is_cuda(), "dY must be a CUDA tensor");
+    int M = dY.size(0);
+    int N = dY.size(1);
+
+    auto db = torch::empty({N}, dY.options());
+    int threads = 256;
+    int blocks_b = (N + threads - 1) / threads;
+    gemm_backward_bias_kernel_torch<<<blocks_b, threads>>>(
+        dY.data_ptr<float>(), db.data_ptr<float>(), M, N
+    );
+    return db;
+}
+
+torch::Tensor gemm_backward_data(torch::Tensor dY, torch::Tensor W) {
+    TORCH_CHECK(dY.is_cuda() && W.is_cuda(), "Inputs must be CUDA tensors");
+    int M = dY.size(0);
+    int N = dY.size(1);
+    int K = W.size(0); // W is [K x N]
+
+    auto dX = torch::empty({M, K}, dY.options());
+    dim3 block(TILE_DIM, TILE_DIM);
+    dim3 grid_x((K + TILE_DIM - 1) / TILE_DIM, (M + TILE_DIM - 1) / TILE_DIM);
+    gemm_backward_data_kernel_torch<<<grid_x, block>>>(
+        dY.data_ptr<float>(), W.data_ptr<float>(), dX.data_ptr<float>(), M, K, N
+    );
+    return dX;
+}
+
 std::vector<torch::Tensor> linear_backward(
     torch::Tensor dY,
     torch::Tensor A,
@@ -224,3 +268,4 @@ std::vector<torch::Tensor> linear_backward(
 
     return {dW, db, dX};
 }
+
