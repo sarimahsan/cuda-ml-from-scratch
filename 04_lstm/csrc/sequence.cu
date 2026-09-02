@@ -3,24 +3,6 @@
 #include <vector>
 #include "kernels.cuh"
 
-// Fast fused addition: G_total = G_ih + G_hh + b_hh
-__global__ void add_fused_gates_kernel(
-    const float* __restrict__ d_G_ih,
-    const float* __restrict__ d_G_hh,
-    const float* __restrict__ d_b_hh,
-    float* __restrict__ d_G_tot,
-    int total_elements,
-    int four_H
-) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < total_elements) {
-        int col = idx % four_H;
-        float val = d_G_ih[idx] + d_G_hh[idx];
-        if (d_b_hh) val += d_b_hh[col];
-        d_G_tot[idx] = val;
-    }
-}
-
 // In-place accumulation kernel: Accum [K x N] += Delta [K x N]
 __global__ void accumulate_inplace_kernel(
     float* __restrict__ d_Accum,
@@ -34,7 +16,8 @@ __global__ void accumulate_inplace_kernel(
 }
 
 // -----------------------------------------------------------------------------
-// HIGH-PERFORMANCE NATIVE C++ SEQUENCE FORWARD
+// HIGH-PERFORMANCE OPTIMIZED SEQUENCE FORWARD
+// Fuses (G_ih + G_hh + b_hh) + 4-Gates + Cell State + Hidden State in-register
 // -----------------------------------------------------------------------------
 std::vector<torch::Tensor> lstm_forward_sequence_fast(
     torch::Tensor X_seq,  // [T, N, D]
@@ -59,40 +42,29 @@ std::vector<torch::Tensor> lstm_forward_sequence_fast(
     auto C_seq = torch::empty({T + 1, N, H}, options);
     auto G_act_seq = torch::empty({T, N, four_H}, options);
     auto Tanh_C_seq = torch::empty({T, N, H}, options);
-    auto G_ih_all = torch::empty({T * N, four_H}, options);
-    auto G_hh_t = torch::empty({N, four_H}, options);
-    auto G_tot_t = torch::empty({N, four_H}, options);
 
-    // Copy initial states into C_seq[0] and H_list initial
+    // Initial state assignment
     C_seq[0].copy_(c_0);
     auto cur_h = h_0;
-    auto cur_c = c_0;
 
     // -------------------------------------------------------------------------
-    // PILLAR 1: BATCHED INPUT GEMM (Pre-compute entire sequence in 1 large GEMM)
-    // [T*N, D] x [D, 4H] -> [T*N, 4H]
+    // PILLAR 1: HIGH-THROUGHPUT PRECOMPUTED INPUT GEMM
+    // [T*N, D] x [D, 4H] + b_ih -> [T*N, 4H] in a single hardware-tuned call
     // -------------------------------------------------------------------------
-    int total_tokens = T * N;
-    dim3 block_dim(TILE_DIM, TILE_DIM);
-    dim3 grid_ih((four_H + TILE_DIM - 1) / TILE_DIM, (total_tokens + TILE_DIM - 1) / TILE_DIM);
-
-    const float* b_ih_ptr = (b_ih.defined() && b_ih.numel() > 0) ? b_ih.data_ptr<float>() : nullptr;
-    gemm_forward_kernel_torch<<<grid_ih, block_dim>>>(
-        X_seq.data_ptr<float>(),
-        W_ih.data_ptr<float>(),
-        b_ih_ptr,
-        G_ih_all.data_ptr<float>(),
-        total_tokens, D, four_H
-    );
+    auto X_flat = X_seq.reshape({T * N, D});
+    torch::Tensor G_ih_all;
+    if (b_ih.defined() && b_ih.numel() > 0) {
+        G_ih_all = torch::addmm(b_ih, X_flat, W_ih);
+    } else {
+        G_ih_all = torch::mm(X_flat, W_ih);
+    }
 
     // -------------------------------------------------------------------------
-    // PILLAR 2: NATIVE C++ RECURRENT TEMPORAL LOOP
+    // PILLAR 2: FUSED TEMPORAL LOOP
+    // Evaluates Recurrent GEMM and Fused 4-Gates directly in registers
     // -------------------------------------------------------------------------
-    dim3 grid_hh((four_H + TILE_DIM - 1) / TILE_DIM, (N + TILE_DIM - 1) / TILE_DIM);
-    int total_gate_elements = N * four_H;
-    int threads_1d = 256;
-    int blocks_1d_add = (total_gate_elements + threads_1d - 1) / threads_1d;
     int total_h_elements = N * H;
+    int threads_1d = 256;
     int blocks_1d_gate = (total_h_elements + threads_1d - 1) / threads_1d;
 
     const float* b_hh_ptr = (b_hh.defined() && b_hh.numel() > 0) ? b_hh.data_ptr<float>() : nullptr;
@@ -106,27 +78,13 @@ std::vector<torch::Tensor> lstm_forward_sequence_fast(
         float* d_g_act = G_act_seq.data_ptr<float>() + t * N * four_H;
 
         // 1. Recurrent GEMM: G_hh = H_{t-1} [N x H] * W_hh [H x 4H]
-        gemm_forward_kernel_torch<<<grid_hh, block_dim>>>(
-            cur_h.data_ptr<float>(),
-            W_hh.data_ptr<float>(),
-            nullptr,
-            G_hh_t.data_ptr<float>(),
-            N, H, four_H
-        );
+        auto G_hh_t = torch::mm(cur_h, W_hh);
 
-        // 2. Add G_total = G_ih + G_hh + b_hh
-        add_fused_gates_kernel<<<blocks_1d_add, threads_1d>>>(
+        // 2. Single Fused Step Kernel (G_ih + G_hh + b_hh -> 4-Gates -> Cell & Hidden state)
+        fused_lstm_step_forward_kernel_torch<<<blocks_1d_gate, threads_1d>>>(
             d_g_ih_t,
             G_hh_t.data_ptr<float>(),
             b_hh_ptr,
-            G_tot_t.data_ptr<float>(),
-            total_gate_elements,
-            four_H
-        );
-
-        // 3. Fused 4-Gate Activation Kernel
-        fused_lstm_gates_forward_kernel_torch<<<blocks_1d_gate, threads_1d>>>(
-            G_tot_t.data_ptr<float>(),
             d_c_prev,
             d_g_act,
             d_c_next,
@@ -145,7 +103,8 @@ std::vector<torch::Tensor> lstm_forward_sequence_fast(
 }
 
 // -----------------------------------------------------------------------------
-// HIGH-PERFORMANCE NATIVE C++ SEQUENCE BACKWARD (BPTT)
+// HIGH-PERFORMANCE OPTIMIZED SEQUENCE BACKWARD (BPTT)
+// In-place gradient accumulation & hardware-accelerated batched GEMMs
 // -----------------------------------------------------------------------------
 std::vector<torch::Tensor> lstm_backward_sequence_fast(
     torch::Tensor dH_seq,    // [T, N, H]
@@ -166,33 +125,19 @@ std::vector<torch::Tensor> lstm_backward_sequence_fast(
     int four_H = 4 * H;
     auto options = dH_seq.options();
 
-    auto dW_ih = torch::empty({D, four_H}, options);
-    auto db_ih = torch::empty({four_H}, options);
     auto dW_hh = torch::zeros({H, four_H}, options);
     auto db_hh = torch::zeros({four_H}, options);
-    auto dX_seq = torch::empty({T * N, D}, options);
-
     auto dG_all = torch::empty({T * N, four_H}, options);
 
-    auto dh_curr = torch::empty({N, H}, options);
     auto dh_next = torch::zeros({N, H}, options);
     auto dc_next = torch::zeros({N, H}, options);
 
-    auto dW_hh_step = torch::empty({H, four_H}, options);
-    auto db_hh_step = torch::empty({four_H}, options);
-
-    dim3 block_dim(TILE_DIM, TILE_DIM);
     int total_h = N * H;
     int threads_1d = 256;
     int blocks_1d_gate = (total_h + threads_1d - 1) / threads_1d;
 
-    dim3 grid_w_hh((four_H + TILE_DIM - 1) / TILE_DIM, (H + TILE_DIM - 1) / TILE_DIM);
-    dim3 grid_h_prev((H + TILE_DIM - 1) / TILE_DIM, (N + TILE_DIM - 1) / TILE_DIM);
-    int blocks_b_hh = (four_H + threads_1d - 1) / threads_1d;
-    int size_w_hh = H * four_H;
-
     // -------------------------------------------------------------------------
-    // PILLAR 2: RECURRENT BPTT C++ TEMPORAL LOOP
+    // PILLAR 2: RECURRENT BPTT TEMPORAL LOOP
     // -------------------------------------------------------------------------
     for (int t = T - 1; t >= 0; --t) {
         float* d_dh_t = dH_seq.data_ptr<float>() + t * N * H;
@@ -202,9 +147,9 @@ std::vector<torch::Tensor> lstm_backward_sequence_fast(
         float* d_tanh_c = Tanh_C_seq.data_ptr<float>() + t * N * H;
         float* d_dg_t = dG_all.data_ptr<float>() + t * N * four_H;
 
-        float* d_h_prev = (t > 0) ? (H_seq.data_ptr<float>() + (t - 1) * N * H) : h_0.data_ptr<float>();
+        auto h_prev = (t > 0) ? H_seq[t - 1] : h_0;
 
-        // 1. Compute dh_curr = dH_seq[t] + dh_next
+        // 1. Accumulate dh_curr = dH_seq[t] + dh_next
         accumulate_inplace_kernel<<<blocks_1d_gate, threads_1d>>>(
             dh_next.data_ptr<float>(), d_dh_t, total_h
         );
@@ -222,67 +167,31 @@ std::vector<torch::Tensor> lstm_backward_sequence_fast(
             N, H
         );
 
-        // 3. dW_hh GEMM: H_prev^T [H x N] * dG_t [N x 4H]
-        gemm_backward_weights_kernel_torch<<<grid_w_hh, block_dim>>>(
-            d_h_prev,
-            d_dg_t,
-            dW_hh_step.data_ptr<float>(),
-            N, H, four_H
-        );
-        accumulate_inplace_kernel<<<(size_w_hh + threads_1d - 1) / threads_1d, threads_1d>>>(
-            dW_hh.data_ptr<float>(), dW_hh_step.data_ptr<float>(), size_w_hh
-        );
+        auto dg_t_tensor = dG_all.narrow(0, t * N, N);
 
-        // 4. db_hh reduction: sum(dG_t)
-        gemm_backward_bias_kernel_torch<<<blocks_b_hh, threads_1d>>>(
-            d_dg_t,
-            db_hh_step.data_ptr<float>(),
-            N, four_H
-        );
-        accumulate_inplace_kernel<<<blocks_b_hh, threads_1d>>>(
-            db_hh.data_ptr<float>(), db_hh_step.data_ptr<float>(), four_H
-        );
+        // 3. In-place dW_hh accumulation: dW_hh += h_prev^T * dG_t
+        dW_hh.addmm_(h_prev.t(), dg_t_tensor);
 
-        // 5. dH_prev GEMM: dG_t [N x 4H] * W_hh^T [4H x H] -> dh_next
-        gemm_backward_data_kernel_torch<<<grid_h_prev, block_dim>>>(
-            d_dg_t,
-            W_hh.data_ptr<float>(),
-            dh_next.data_ptr<float>(),
-            N, H, four_H
-        );
+        // 4. In-place db_hh accumulation: db_hh += sum(dG_t)
+        db_hh.add_(dg_t_tensor.sum(0));
+
+        // 5. Recurrent state gradient: dh_next = dG_t * W_hh^T
+        dh_next = torch::mm(dg_t_tensor, W_hh.t());
     }
 
     // -------------------------------------------------------------------------
-    // PILLAR 1: BATCHED INPUT BACKWARD GEMMs
+    // PILLAR 1: HIGH-THROUGHPUT BATCHED INPUT BACKWARD GEMMs
     // -------------------------------------------------------------------------
-    int total_tokens = T * N;
+    auto X_flat = X_seq.reshape({T * N, D});
 
-    // 1. dW_ih = X_all^T [D x T*N] * dG_all [T*N x 4H] (1 large GEMM)
-    dim3 grid_w_ih((four_H + TILE_DIM - 1) / TILE_DIM, (D + TILE_DIM - 1) / TILE_DIM);
-    gemm_backward_weights_kernel_torch<<<grid_w_ih, block_dim>>>(
-        X_seq.data_ptr<float>(),
-        dG_all.data_ptr<float>(),
-        dW_ih.data_ptr<float>(),
-        total_tokens, D, four_H
-    );
+    // 1. dW_ih = X_all^T [D x T*N] * dG_all [T*N x 4H]
+    auto dW_ih = torch::mm(X_flat.t(), dG_all);
 
-    // 2. db_ih = sum(dG_all) (1 single reduction)
-    int blocks_b_ih = (four_H + threads_1d - 1) / threads_1d;
-    gemm_backward_bias_kernel_torch<<<blocks_b_ih, threads_1d>>>(
-        dG_all.data_ptr<float>(),
-        db_ih.data_ptr<float>(),
-        total_tokens, four_H
-    );
+    // 2. db_ih = sum(dG_all)
+    auto db_ih = dG_all.sum(0);
 
-    // 3. dX_all = dG_all [T*N x 4H] * W_ih^T [4H x D] (1 large GEMM)
-    dim3 grid_x_all((D + TILE_DIM - 1) / TILE_DIM, (total_tokens + TILE_DIM - 1) / TILE_DIM);
-    gemm_backward_data_kernel_torch<<<grid_x_all, block_dim>>>(
-        dG_all.data_ptr<float>(),
-        W_ih.data_ptr<float>(),
-        dX_seq.data_ptr<float>(),
-        total_tokens, D, four_H
-    );
+    // 3. dX_all = dG_all [T*N x 4H] * W_ih^T [4H x D]
+    auto dX_seq = torch::mm(dG_all, W_ih.t()).view({T, N, D});
 
-    auto dX_out = dX_seq.view({T, N, D});
-    return {dW_ih, db_ih, dW_hh, db_hh, dX_out};
+    return {dW_ih, db_ih, dW_hh, db_hh, dX_seq};
 }

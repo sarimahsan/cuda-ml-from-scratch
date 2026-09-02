@@ -11,7 +11,7 @@ __device__ __forceinline__ float sigmoidf_device(float x) {
 }
 
 // -----------------------------------------------------------------------------
-// Shared 2D Tiled GEMM Kernels
+// Shared 2D Tiled GEMM Kernels (Fallback / Standalone)
 // -----------------------------------------------------------------------------
 
 __global__ inline void gemm_forward_kernel_torch(
@@ -71,7 +71,8 @@ __global__ inline void gemm_backward_weights_kernel_torch(
     float* __restrict__ d_dW,
     int M,
     int K,
-    int N
+    int N,
+    bool accumulate = false
 ) {
     __shared__ float s_AT[TILE_DIM][TILE_DIM];
     __shared__ float s_dY[TILE_DIM][TILE_DIM];
@@ -108,7 +109,11 @@ __global__ inline void gemm_backward_weights_kernel_torch(
     }
 
     if (row < K && col < N) {
-        d_dW[row * N + col] = sum;
+        if (accumulate) {
+            d_dW[row * N + col] += sum;
+        } else {
+            d_dW[row * N + col] = sum;
+        }
     }
 }
 
@@ -163,7 +168,8 @@ __global__ inline void gemm_backward_bias_kernel_torch(
     const float* __restrict__ d_dY,
     float* __restrict__ d_db,
     int M,
-    int N
+    int N,
+    bool accumulate = false
 ) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     if (col < N) {
@@ -171,12 +177,76 @@ __global__ inline void gemm_backward_bias_kernel_torch(
         for (int row = 0; row < M; ++row) {
             sum += d_dY[row * N + col];
         }
-        d_db[col] = sum;
+        if (accumulate) {
+            d_db[col] += sum;
+        } else {
+            d_db[col] = sum;
+        }
     }
 }
 
 // -----------------------------------------------------------------------------
-// Shared Fused 4-Gate Kernels
+// High-Performance Fused LSTM Single-Pass Step Forward Kernel
+// Fuses: (G_ih + G_hh + b_hh) -> 4-gate activations -> cell state -> hidden state
+// -----------------------------------------------------------------------------
+
+__global__ inline void fused_lstm_step_forward_kernel_torch(
+    const float* __restrict__ d_g_ih,
+    const float* __restrict__ d_g_hh,
+    const float* __restrict__ d_b_hh,
+    const float* __restrict__ d_c_prev,
+    float* __restrict__ d_g_act,
+    float* __restrict__ d_c_next,
+    float* __restrict__ d_tanh_c,
+    float* __restrict__ d_h_next,
+    int N,
+    int H
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_elements = N * H;
+    if (idx < total_elements) {
+        int n = idx / H;
+        int h = idx % H;
+
+        int base_4h = n * (4 * H);
+
+        float z_i = d_g_ih[base_4h + h] + d_g_hh[base_4h + h];
+        float z_f = d_g_ih[base_4h + H + h] + d_g_hh[base_4h + H + h];
+        float z_g = d_g_ih[base_4h + 2 * H + h] + d_g_hh[base_4h + 2 * H + h];
+        float z_o = d_g_ih[base_4h + 3 * H + h] + d_g_hh[base_4h + 3 * H + h];
+
+        if (d_b_hh != nullptr) {
+            z_i += d_b_hh[h];
+            z_f += d_b_hh[H + h];
+            z_g += d_b_hh[2 * H + h];
+            z_o += d_b_hh[3 * H + h];
+        }
+
+        float i_val = sigmoidf_device(z_i);
+        float f_val = sigmoidf_device(z_f);
+        float g_val = tanhf(z_g);
+        float o_val = sigmoidf_device(z_o);
+
+        if (d_g_act != nullptr) {
+            d_g_act[base_4h + h] = i_val;
+            d_g_act[base_4h + H + h] = f_val;
+            d_g_act[base_4h + 2 * H + h] = g_val;
+            d_g_act[base_4h + 3 * H + h] = o_val;
+        }
+
+        float c_prev = (d_c_prev != nullptr) ? d_c_prev[idx] : 0.0f;
+        float c_next = f_val * c_prev + i_val * g_val;
+        float tc = tanhf(c_next);
+        float h_next = o_val * tc;
+
+        d_c_next[idx] = c_next;
+        if (d_tanh_c != nullptr) d_tanh_c[idx] = tc;
+        d_h_next[idx] = h_next;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Standalone Fused 4-Gate Forward & Backward (with fast math)
 // -----------------------------------------------------------------------------
 
 __global__ inline void fused_lstm_gates_forward_kernel_torch(
