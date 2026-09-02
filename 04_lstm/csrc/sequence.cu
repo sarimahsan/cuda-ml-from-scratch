@@ -125,10 +125,7 @@ std::vector<torch::Tensor> lstm_backward_sequence_fast(
     int four_H = 4 * H;
     auto options = dH_seq.options();
 
-    auto dW_hh = torch::zeros({H, four_H}, options);
-    auto db_hh = torch::zeros({four_H}, options);
     auto dG_all = torch::empty({T * N, four_H}, options);
-
     auto dh_next = torch::zeros({N, H}, options);
     auto dc_next = torch::zeros({N, H}, options);
 
@@ -137,7 +134,7 @@ std::vector<torch::Tensor> lstm_backward_sequence_fast(
     int blocks_1d_gate = (total_h + threads_1d - 1) / threads_1d;
 
     // -------------------------------------------------------------------------
-    // PILLAR 2: RECURRENT BPTT TEMPORAL LOOP
+    // PILLAR 2: RECURRENT BPTT TEMPORAL LOOP (Only 2 operations per step!)
     // -------------------------------------------------------------------------
     for (int t = T - 1; t >= 0; --t) {
         float* d_dh_t = dH_seq.data_ptr<float>() + t * N * H;
@@ -146,8 +143,6 @@ std::vector<torch::Tensor> lstm_backward_sequence_fast(
         float* d_c_curr = C_seq.data_ptr<float>() + (t + 1) * N * H;
         float* d_tanh_c = Tanh_C_seq.data_ptr<float>() + t * N * H;
         float* d_dg_t = dG_all.data_ptr<float>() + t * N * four_H;
-
-        auto h_prev = (t > 0) ? H_seq[t - 1] : h_0;
 
         // 1. Accumulate dh_curr = dH_seq[t] + dh_next
         accumulate_inplace_kernel<<<blocks_1d_gate, threads_1d>>>(
@@ -167,30 +162,30 @@ std::vector<torch::Tensor> lstm_backward_sequence_fast(
             N, H
         );
 
+        // 3. Recurrent state gradient: dh_next = dG_t * W_hh^T
         auto dg_t_tensor = dG_all.narrow(0, t * N, N);
-
-        // 3. In-place dW_hh accumulation: dW_hh += h_prev^T * dG_t
-        dW_hh.addmm_(h_prev.t(), dg_t_tensor);
-
-        // 4. In-place db_hh accumulation: db_hh += sum(dG_t)
-        db_hh.add_(dg_t_tensor.sum(0));
-
-        // 5. Recurrent state gradient: dh_next = dG_t * W_hh^T
         dh_next = torch::mm(dg_t_tensor, W_hh.t());
     }
 
     // -------------------------------------------------------------------------
-    // PILLAR 1: HIGH-THROUGHPUT BATCHED INPUT BACKWARD GEMMs
+    // PILLAR 1: HIGH-THROUGHPUT BATCHED PARAMETER GRADIENTS & DATA GRADIENTS
     // -------------------------------------------------------------------------
     auto X_flat = X_seq.reshape({T * N, D});
 
     // 1. dW_ih = X_all^T [D x T*N] * dG_all [T*N x 4H]
     auto dW_ih = torch::mm(X_flat.t(), dG_all);
 
-    // 2. db_ih = sum(dG_all)
+    // 2. db_ih = sum(dG_all) & db_hh = db_ih.clone()
+    // Both gate biases receive the exact same accumulated gradient sum(dG_all)
     auto db_ih = dG_all.sum(0);
+    auto db_hh = db_ih.clone();
 
-    // 3. dX_all = dG_all [T*N x 4H] * W_ih^T [4H x D]
+    // 3. dW_hh = H_prev_all^T [H x T*N] * dG_all [T*N x 4H] in a SINGLE batched GEMM!
+    // Replaces all 64 individual loop GEMMs with 1 batched high-speed GEMM
+    auto H_prev_all = torch::cat({h_0.unsqueeze(0), H_seq.slice(0, 0, T - 1)}, 0).reshape({T * N, H});
+    auto dW_hh = torch::mm(H_prev_all.t(), dG_all);
+
+    // 4. dX_all = dG_all [T*N x 4H] * W_ih^T [4H x D]
     auto dX_seq = torch::mm(dG_all, W_ih.t()).view({T, N, D});
 
     return {dW_ih, db_ih, dW_hh, db_hh, dX_seq};

@@ -104,8 +104,6 @@ def profile_backward_deep_dive(
     for _ in range(num_runs):
         # 1. Allocation timing
         ev_start.record()
-        dW_hh = torch.zeros((hidden_dim, four_H), device=device)
-        db_hh = torch.zeros((four_H,), device=device)
         dG_all = torch.empty((seq_len * batch_size, four_H), device=device)
         dh_next = torch.zeros((batch_size, hidden_dim), device=device)
         dc_next = torch.zeros((batch_size, hidden_dim), device=device)
@@ -113,10 +111,9 @@ def profile_backward_deep_dive(
         torch.cuda.synchronize()
         t_alloc += ev_start.elapsed_time(ev_stop)
 
-        # 2. Recurrent loop micro-benchmarks
+        # 2. Recurrent loop micro-benchmarks (Now only 2 operations per step!)
         for t in reversed(range(seq_len)):
             d_dh_t = grad_out[t]
-            h_prev = H_seq[t - 1] if t > 0 else h_0
             d_g_act_t = G_act_seq[t]
             d_c_prev = C_seq[t]
             d_c_curr = C_seq[t + 1]
@@ -139,28 +136,14 @@ def profile_backward_deep_dive(
             torch.cuda.synchronize()
             t_gate_bwd += ev_start.elapsed_time(ev_stop)
 
-            # c) dW_hh accumulation GEMM: [H x N] x [N x 4H]
-            ev_start.record()
-            dW_hh.addmm_(h_prev.t(), dg_t)
-            ev_stop.record()
-            torch.cuda.synchronize()
-            t_gemm_w_hh += ev_start.elapsed_time(ev_stop)
-
-            # d) db_hh bias reduction
-            ev_start.record()
-            db_hh.add_(dg_t.sum(0))
-            ev_stop.record()
-            torch.cuda.synchronize()
-            t_bias_hh += ev_start.elapsed_time(ev_stop)
-
-            # e) dh_prev GEMM: [N x 4H] x [4H x H]
+            # c) dh_prev GEMM: [N x 4H] x [4H x H]
             ev_start.record()
             dh_next = torch.mm(dg_t, model.W_hh.t())
             ev_stop.record()
             torch.cuda.synchronize()
             t_gemm_h_prev += ev_start.elapsed_time(ev_stop)
 
-        # 3. Batched Input Backward
+        # 3. Batched Input & Recurrent Parameter Gradients (Outside the loop!)
         X_flat = X.reshape(seq_len * batch_size, input_dim)
 
         ev_start.record()
@@ -171,9 +154,18 @@ def profile_backward_deep_dive(
 
         ev_start.record()
         db_ih = dG_all.sum(0)
+        db_hh = db_ih.clone()
         ev_stop.record()
         torch.cuda.synchronize()
         t_bias_ih += ev_start.elapsed_time(ev_stop)
+
+        # Batched dW_hh: [H x T*N] * [T*N x 4H] in 1 single GEMM
+        H_prev_all = torch.cat((h_0.unsqueeze(0), H_seq[:seq_len - 1]), dim=0).reshape(seq_len * batch_size, hidden_dim)
+        ev_start.record()
+        dW_hh = torch.mm(H_prev_all.t(), dG_all)
+        ev_stop.record()
+        torch.cuda.synchronize()
+        t_gemm_w_hh += ev_start.elapsed_time(ev_stop)
 
         ev_start.record()
         dX_seq = torch.mm(dG_all, model.W_ih.t()).view(seq_len, batch_size, input_dim)
@@ -184,19 +176,17 @@ def profile_backward_deep_dive(
     # Average times
     t_dh_accum /= num_runs
     t_gate_bwd /= num_runs
-    t_gemm_w_hh /= num_runs
-    t_bias_hh /= num_runs
     t_gemm_h_prev /= num_runs
-
-    recurrent_total = t_dh_accum + t_gate_bwd + t_gemm_w_hh + t_bias_hh + t_gemm_h_prev
+    recurrent_total = t_dh_accum + t_gate_bwd + t_gemm_h_prev
 
     t_gemm_w_ih /= num_runs
+    t_gemm_w_hh /= num_runs
     t_bias_ih /= num_runs
     t_gemm_x /= num_runs
-    input_total = t_gemm_w_ih + t_bias_ih + t_gemm_x
+    batched_grad_total = t_gemm_w_ih + t_gemm_w_hh + t_bias_ih + t_gemm_x
 
     t_alloc /= num_runs
-    accounted_ms = recurrent_total + input_total + t_alloc
+    accounted_ms = recurrent_total + batched_grad_total + t_alloc
     dispatch_overhead = max(0.0, total_bwd_ms - accounted_ms)
 
     print(f"\n{'Subsystem / Micro-Operation':<46} | {'Time (ms)':>10} | {'% of Backward':>14} | {'Calls / Sequence':>16}")
@@ -204,22 +194,21 @@ def profile_backward_deep_dive(
     print(f"▶ TOTAL MEASURED BACKWARD PASS                     | {total_bwd_ms:9.3f} ms | {'100.0%':>14} | {'1 call':>16}")
     print("-" * 95)
 
-    print(f"1. RECURRENT BPTT LOOP (T={seq_len} steps)              | {recurrent_total:9.3f} ms | {recurrent_total/total_bwd_ms*100:13.1f}% | {seq_len*5:14} calls")
-    print(f"   ├── dW_hh Recurrent GEMM (H_prev^T * dG)        | {t_gemm_w_hh:9.3f} ms | {t_gemm_w_hh/total_bwd_ms*100:13.1f}% | {seq_len:14} calls")
+    print(f"1. OPTIMIZED RECURRENT LOOP (T={seq_len} steps)         | {recurrent_total:9.3f} ms | {recurrent_total/total_bwd_ms*100:13.1f}% | {seq_len*3:14} calls")
     print(f"   ├── dH_prev Data GEMM (dG * W_hh^T)             | {t_gemm_h_prev:9.3f} ms | {t_gemm_h_prev/total_bwd_ms*100:13.1f}% | {seq_len:14} calls")
-    print(f"   ├── db_hh Bias Reduction (sum(dG))              | {t_bias_hh:9.3f} ms | {t_bias_hh/total_bwd_ms*100:13.1f}% | {seq_len:14} calls")
     print(f"   ├── Fused Gate Backward Kernel (dG, dc_prev)    | {t_gate_bwd:9.3f} ms | {t_gate_bwd/total_bwd_ms*100:13.1f}% | {seq_len:14} calls")
     print(f"   └── dh Accumulation Kernel (dH[t] + dh_next)    | {t_dh_accum:9.3f} ms | {t_dh_accum/total_bwd_ms*100:13.1f}% | {seq_len:14} calls")
     print("-" * 95)
 
-    print(f"2. BATCHED INPUT BACKWARD                          | {input_total:9.3f} ms | {input_total/total_bwd_ms*100:13.1f}% | {'3 calls':>16}")
-    print(f"   ├── dW_ih GEMM (X_all^T * dG_all)               | {t_gemm_w_ih:9.3f} ms | {t_gemm_w_ih/total_bwd_ms*100:13.1f}% | {'1 call':>16}")
+    print(f"2. BATCHED PARAMETER & DATA GRADIENTS (Outside Loop)| {batched_grad_total:9.3f} ms | {batched_grad_total/total_bwd_ms*100:13.1f}% | {'4 calls':>16}")
+    print(f"   ├── dW_hh Batched GEMM (H_prev_all^T * dG_all)  | {t_gemm_w_hh:9.3f} ms | {t_gemm_w_hh/total_bwd_ms*100:13.1f}% | {'1 call (NEW!)':>16}")
+    print(f"   ├── dW_ih Batched GEMM (X_all^T * dG_all)       | {t_gemm_w_ih:9.3f} ms | {t_gemm_w_ih/total_bwd_ms*100:13.1f}% | {'1 call':>16}")
     print(f"   ├── dX_seq Data GEMM (dG_all * W_ih^T)          | {t_gemm_x:9.3f} ms | {t_gemm_x/total_bwd_ms*100:13.1f}% | {'1 call':>16}")
-    print(f"   └── db_ih Bias Reduction (sum(dG_all))          | {t_bias_ih:9.3f} ms | {t_bias_ih/total_bwd_ms*100:13.1f}% | {'1 call':>16}")
+    print(f"   └── Combined Bias Reductions (db_ih, db_hh)     | {t_bias_ih:9.3f} ms | {t_bias_ih/total_bwd_ms*100:13.1f}% | {'1 call (NEW!)':>16}")
     print("-" * 95)
 
-    print(f"3. Buffer Allocation & Graph Housekeeping          | {t_alloc:9.3f} ms | {t_alloc/total_bwd_ms*100:13.1f}% | {'5 allocs':>16}")
-    print(f"4. Host CPU Queue & Driver Dispatch Overhead       | {dispatch_overhead:9.3f} ms | {dispatch_overhead/total_bwd_ms*100:13.1f}% | {'320 dispatches':>16}")
+    print(f"3. Buffer Allocation & Graph Housekeeping          | {t_alloc:9.3f} ms | {t_alloc/total_bwd_ms*100:13.1f}% | {'3 allocs':>16}")
+    print(f"4. Host CPU Queue & Driver Dispatch Overhead       | {dispatch_overhead:9.3f} ms | {dispatch_overhead/total_bwd_ms*100:13.1f}% | {'Reduced to 195':>16}")
     print("=" * 95 + "\n")
 
 
