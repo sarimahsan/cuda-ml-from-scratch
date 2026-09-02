@@ -106,9 +106,13 @@ Tested on NVIDIA Tesla T4 GPU ($T=64, N=64, D=128, H=256$):
 
 | Implementation | Forward Latency | Backward Latency | Total Step Time | Throughput |
 | :--- | :---: | :---: | :---: | :---: |
-| **Custom CUDA (Modular Gates)** | $10.76\text{ ms}$ | $16.15\text{ ms}$ | $26.92\text{ ms}$ | $152{,}181\text{ tokens/sec}$ |
-| **Custom CUDA (Fused Gates)** | $4.33\text{ ms}$ | $12.65\text{ ms}$ | $16.99\text{ ms}$ | $241{,}136\text{ tokens/sec}$ |
-| **PyTorch `nn.LSTM` (cuDNN)** | $1.81\text{ ms}$ | $2.40\text{ ms}$ | $4.21\text{ ms}$ | $973{,}352\text{ tokens/sec}$ |
+| **Custom CUDA (Modular Baseline)** | $15.93\text{ ms}$ | $19.91\text{ ms}$ | $35.84\text{ ms}$ | $114{,}292\text{ tokens/sec}$ |
+| **Custom CUDA (Gen 2 Fused)** | $4.33\text{ ms}$ | $12.65\text{ ms}$ | $16.99\text{ ms}$ | $241{,}136\text{ tokens/sec}$ |
+| **Custom CUDA (Gen 3 NEW Fused)** | **$1.29\text{ ms}$** | $4.09\text{ ms}$ | **$5.39\text{ ms}$** | **$760{,}340\text{ tokens/sec}$** |
+| **PyTorch `nn.LSTM` (cuDNN Native)** | $1.79\text{ ms}$ | $2.64\text{ ms}$ | $4.43\text{ ms}$ | $923{,}690\text{ tokens/sec}$ |
+
+> [!TIP]
+> **Forward Pass Win:** Our Gen 3 Custom Fused kernel is **$27.9\%$ faster** on the forward pass than PyTorch's native NVIDIA cuDNN implementation ($1.29\text{ ms}$ vs $1.79\text{ ms}$).
 
 ---
 
