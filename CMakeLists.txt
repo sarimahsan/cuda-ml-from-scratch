@@ -5,12 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --use_fast_math")
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/00_common/include)
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/00_common/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/include
+)
 
-add_subdirectory(01_logistic_regression)
-add_subdirectory(02_mlp)
-add_subdirectory(03_cnn)
-add_subdirectory(04_lstm)
-# Future modules will be added here:
-# add_subdirectory(05_attention)
-# add_subdirectory(06_transformer)
+add_subdirectory(kernels)
+

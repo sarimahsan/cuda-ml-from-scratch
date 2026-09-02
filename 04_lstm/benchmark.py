@@ -132,32 +132,37 @@ def benchmark_macro_throughput(seq_len=64, batch_size=64, input_dim=128, hidden_
     X = torch.randn(seq_len, batch_size, input_dim, device=device)
     grad_out = torch.randn(seq_len, batch_size, hidden_dim, device=device)
 
-    # Helper benchmark function
+    # Helper benchmark function using CUDA Events
     def measure_pipeline(name, forward_fn, backward_fn):
         # Warmup
-        for _ in range(5):
+        for _ in range(10):
             out, cache = forward_fn()
             backward_fn(out, cache)
         torch.cuda.synchronize()
 
-        # Measure Forward
-        start = time.perf_counter()
+        # Measure Forward using CUDA Events
+        start_event = torch.cuda.Event(enable_timing=True)
+        stop_event = torch.cuda.Event(enable_timing=True)
+
+        start_event.record()
         for _ in range(iters):
             out, cache = forward_fn()
+        stop_event.record()
         torch.cuda.synchronize()
-        fwd_ms = ((time.perf_counter() - start) / iters) * 1000.0
+        fwd_ms = start_event.elapsed_time(stop_event) / iters
 
-        # Measure Backward
-        start = time.perf_counter()
+        # Measure Backward using CUDA Events
+        start_event.record()
         for _ in range(iters):
             backward_fn(out, cache)
+        stop_event.record()
         torch.cuda.synchronize()
-        bwd_ms = ((time.perf_counter() - start) / iters) * 1000.0
+        bwd_ms = start_event.elapsed_time(stop_event) / iters
 
         total_ms = fwd_ms + bwd_ms
         tokens_sec = total_tokens / (total_ms / 1000.0)
 
-        print(f"• {name:<30}: Forward = {fwd_ms:6.2f} ms | Backward = {bwd_ms:6.2f} ms | Total = {total_ms:6.2f} ms | Throughput = {tokens_sec:9,.0f} tok/s")
+        print(f"• {name:<32}: Forward = {fwd_ms:6.2f} ms | Backward = {bwd_ms:6.2f} ms | Total = {total_ms:6.2f} ms | Throughput = {tokens_sec:9,.0f} tok/s")
         return fwd_ms, bwd_ms, total_ms, tokens_sec
 
     # 1. Custom Modular
@@ -170,7 +175,7 @@ def benchmark_macro_throughput(seq_len=64, batch_size=64, input_dim=128, hidden_
 
     measure_pipeline("Custom CUDA (Modular Gates)", fwd_mod, bwd_mod)
 
-    # 2. Custom Fused
+    # 2. Custom Fused Native C++
     def fwd_fused():
         out, (h, c), cache = custom_fused.forward_sequence(X)
         return out, cache
@@ -180,7 +185,7 @@ def benchmark_macro_throughput(seq_len=64, batch_size=64, input_dim=128, hidden_
 
     measure_pipeline("Custom CUDA (Fused Gates)", fwd_fused, bwd_fused)
 
-    # 3. PyTorch Native
+    # 3. PyTorch Native cuDNN
     def fwd_pt():
         out, _ = pt_lstm(X)
         return out, None
@@ -191,6 +196,7 @@ def benchmark_macro_throughput(seq_len=64, batch_size=64, input_dim=128, hidden_
 
     measure_pipeline("PyTorch nn.LSTM (cuDNN)", fwd_pt, bwd_pt)
     print("=" * 75 + "\n")
+
 
 
 def main():

@@ -1,21 +1,39 @@
-# 🚀 CUDA ML Models: From Scratch
+# 🚀 CUDA ML Framework: From Scratch
 
 <div align="center">
 
-### 📑 Model Documentation & Quick Navigation Tabs
+### 📑 Framework Architecture & Quick Navigation Tabs
 
-| 📊 [**01. Logistic Regression**](01_logistic_regression/README.md) | 🧠 [**02. MLP**](02_mlp/README.md) | 👁️ [**03. CNN**](03_cnn/README.md) | ⚡ [**04. LSTM**](04_lstm/README.md) |
-| :---: | :---: | :---: | :---: |
-| Binary Hypothesis • Warp BCE | 2D Tiled GEMMs • Adam/SGD | 2D Spatial Conv • MaxPool | Modular & Fused Gating • BPTT |
-| Titanic Survival ($N=891$) | MNIST Digits ($>98\%$) | MNIST Digits ($>98.6\%$) | Shakespeare SeqLM ($241\text{k tok/s}$) |
+| ⚙️ [**CUDA Kernel Engine**](kernels/README.md) | 📊 [**01. Logistic Regression**](01_logistic_regression/README.md) | 🧠 [**02. MLP**](02_mlp/README.md) | 👁️ [**03. CNN**](03_cnn/README.md) | ⚡ [**04. LSTM**](04_lstm/README.md) |
+| :---: | :---: | :---: | :---: | :---: |
+| 8 Core Primitives • Fused Ops | Binary Hypothesis • Warp BCE | 2D Tiled GEMMs • Adam/SGD | 2D Spatial Conv • MaxPool | Modular & Fused Gating • BPTT |
+| GEMM, Conv, Softmax, Norms | Titanic Survival ($N=891$) | MNIST Digits ($>98\%$) | MNIST Digits ($>98.6\%$) | Shakespeare SeqLM ($241\text{k tok/s}$) |
 
 ---
 
 </div>
 
-A comprehensive collection of fundamental machine learning architectures engineered from the ground up in **pure CUDA C++ GPU kernels** with PyTorch C++ / CUDA extensions, vectorized optimizers, and automated Python training pipelines.
+A high-performance machine learning framework and kernel engine engineered from the ground up in **pure CUDA C++ GPU kernels** with PyTorch C++ extensions, register-tiled matrix multiplication, vectorized memory pipelines (`float4`), online FlashSoftmax, Welford LayerNorm/RMSNorm, and end-to-end trained deep learning models.
 
 ---
+
+## 🏛️ CUDA Kernel Engine: 8 Core GPU Primitives
+
+The [`kernels/`](kernels/) directory provides standalone, hardware-saturating GPU kernels designed to beat PyTorch native operations:
+
+| Kernel Primitive | Math Formulation | Key Optimizations |
+| :--- | :--- | :--- |
+| 🧮 [**GEMM**](kernels/include/gemm.cuh) | $\mathbf{C} = \alpha \mathbf{A}\mathbf{B} + \beta \mathbf{C}$ | 2D Shared-Memory Tiling ($16\times 16$), Register-Tiled Micro-Kernels ($4\times 4$), Bank conflict elimination. |
+| 🖼️ [**Convolution**](kernels/include/convolution.cuh) | $\mathbf{Y} = \mathbf{X} * \mathbf{K} + \mathbf{b}$ | Direct 2D Spatial Conv with shared halo caching, Im2Col + Tiled GEMM, Fused Conv+Bias+Act. |
+| 📉 [**Reduction**](kernels/include/reduction.cuh) | $S = \sum x_i, \quad M = \max x_i$ | Register warp-shuffles (`__shfl_down_sync`), block-wide tree reductions, multi-block atomic aggregation. |
+| 🎯 [**Softmax**](kernels/include/softmax.cuh) | $P_i = \frac{e^{z_i - \max(\mathbf{z})}}{\sum e^{z_j - \max(\mathbf{z})}}$ | **Online FlashSoftmax**: Single-pass register max and normalizer computation without intermediate VRAM roundtrips. |
+| ⚖️ [**Normalization**](kernels/include/normalization.cuh) | $\hat{x}_i = \frac{x_i - \mu}{\sqrt{\sigma^2 + \epsilon}} \gamma + \beta$ | **Welford 1-Pass Algorithm**: Warp-level concurrent $\mu$ and $\sigma^2$ calculation, LayerNorm, RMSNorm, BatchNorm fwd/bwd. |
+| ⚡ [**Activation**](kernels/include/activation.cuh) | $\text{GELU}(x), \text{SiLU}(x), \text{ReLU}$ | Vectorized 128-bit memory bus saturation (`float4`), analytical forward & backward derivative kernels. |
+| 🏊 [**Pooling**](kernels/include/pooling.cuh) | $y_{i,j} = \max_{(u,v)} x_{i+u, j+v}$ | MaxPool2D with packed coordinate winner masks, AvgPool2D, Global AvgPool forward and zero-search backward. |
+| ➕ [**Elementwise**](kernels/include/elementwise.cuh) | $\mathbf{Z} = \mathbf{X} + \mathbf{Y} + \mathbf{b}$ | Fused residual skip connections, bias addition broadcast, GPU Dropout with Philox-4x32 PRNG. |
+
+---
+
 
 ## ⚡ Master GPU Benchmark Suite (NVIDIA Tesla T4)
 
@@ -113,19 +131,25 @@ python 01_logistic_regression/train_titanic.py
 
 ---
 
-## 🚀 Unified Master Benchmark Runner
+## 🚀 Running Benchmarks
 
-Benchmark all models or any specific architecture on your GPU in one command:
+Each module has a dedicated, high-precision CUDA benchmark suite measuring exact numerical parity and kernel execution times using GPU hardware events (`torch.cuda.Event`):
 
 ```bash
-# 1. Run all benchmarks across all 4 architectures:
-python benchmark_all.py --all
+# 1. Benchmark standalone CUDA Kernel Engine primitives vs PyTorch native:
+python kernels/benchmarks/benchmark_all_kernels.py
 
-# 2. Or benchmark an individual model:
-python benchmark_all.py --model logistic
-python benchmark_all.py --model mlp
-python benchmark_all.py --model cnn
-python benchmark_all.py --model lstm
+# 2. Benchmark 01_logistic_regression vs PyTorch:
+python 01_logistic_regression/benchmark.py
+
+# 3. Benchmark 02_mlp vs PyTorch:
+python 02_mlp/benchmark.py
+
+# 4. Benchmark 03_cnn vs PyTorch:
+python 03_cnn/benchmark.py
+
+# 5. Benchmark 04_lstm vs PyTorch:
+python 04_lstm/benchmark.py
 ```
 
 ---
@@ -141,5 +165,7 @@ python benchmark_all.py --model lstm
 !pip install ninja pandas scikit-learn torchvision
 
 # Run benchmarks
-!python benchmark_all.py --all
+!python kernels/benchmarks/benchmark_all_kernels.py
+!python 04_lstm/benchmark.py
 ```
+

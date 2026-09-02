@@ -36,6 +36,10 @@ def _ensure_ninja():
 _ensure_ninja()
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.dirname(current_dir)
+kernels_dir = os.path.join(root_dir, "kernels")
+common_dir = os.path.join(root_dir, "00_common", "include")
+
 sources = [
     os.path.join(current_dir, "csrc", "binding.cpp"),
     os.path.join(current_dir, "csrc", "input_gate.cu"),
@@ -44,26 +48,30 @@ sources = [
     os.path.join(current_dir, "csrc", "output_gate.cu"),
     os.path.join(current_dir, "csrc", "cell_state.cu"),
     os.path.join(current_dir, "csrc", "fused_gates.cu"),
-    os.path.join(current_dir, "csrc", "linear.cu"),
-    os.path.join(current_dir, "csrc", "softmax_loss.cu"),
-    os.path.join(current_dir, "csrc", "optimizers.cu"),
     os.path.join(current_dir, "csrc", "sequence.cu"),
+    os.path.join(kernels_dir, "src", "gemm.cu"),
+    os.path.join(kernels_dir, "src", "softmax.cu"),
+    os.path.join(kernels_dir, "src", "reduction.cu"),
+    os.path.join(kernels_dir, "src", "elementwise.cu"),
+    os.path.join(kernels_dir, "src", "optimizers.cu"),
 ]
 
 try:
     import cuda_lstm as _ext  # type: ignore
 except ImportError:
     if torch.cuda.is_available():
-        print("[INFO] Compiling modular CUDA LSTM extension via JIT...")
+        print("[INFO] Compiling modular CUDA LSTM extension via JIT using centralized kernels...")
         _ext = load(
             name="cuda_lstm",
             sources=sources,
+            extra_include_paths=[os.path.join(kernels_dir, "include"), common_dir],
             extra_cflags=["-O3", "-std=c++17"],
             extra_cuda_cflags=["-O3", "--use_fast_math", "-std=c++17"],
             verbose=False,
         )
     else:
         _ext = None
+
 
 
 class CUDALSTMCell:
