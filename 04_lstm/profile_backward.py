@@ -104,11 +104,11 @@ def profile_backward_deep_dive(
     for _ in range(num_runs):
         # 1. Allocation timing
         ev_start.record()
-        dW_hh = torch.zeros({hidden_dim, four_H}, device=device)
-        db_hh = torch.zeros({four_H}, device=device)
-        dG_all = torch.empty({seq_len * batch_size, four_H}, device=device)
-        dh_next = torch.zeros({batch_size, hidden_dim}, device=device)
-        dc_next = torch.zeros({batch_size, hidden_dim}, device=device)
+        dW_hh = torch.zeros((hidden_dim, four_H), device=device)
+        db_hh = torch.zeros((four_H,), device=device)
+        dG_all = torch.empty((seq_len * batch_size, four_H), device=device)
+        dh_next = torch.zeros((batch_size, hidden_dim), device=device)
+        dc_next = torch.zeros((batch_size, hidden_dim), device=device)
         ev_stop.record()
         torch.cuda.synchronize()
         t_alloc += ev_start.elapsed_time(ev_stop)
@@ -161,7 +161,7 @@ def profile_backward_deep_dive(
             t_gemm_h_prev += ev_start.elapsed_time(ev_stop)
 
         # 3. Batched Input Backward
-        X_flat = X.reshape({seq_len * batch_size, input_dim})
+        X_flat = X.reshape(seq_len * batch_size, input_dim)
 
         ev_start.record()
         dW_ih = torch.mm(X_flat.t(), dG_all)
@@ -176,7 +176,7 @@ def profile_backward_deep_dive(
         t_bias_ih += ev_start.elapsed_time(ev_stop)
 
         ev_start.record()
-        dX_seq = torch.mm(dG_all, model.W_ih.t()).view({seq_len, batch_size, input_dim})
+        dX_seq = torch.mm(dG_all, model.W_ih.t()).view(seq_len, batch_size, input_dim)
         ev_stop.record()
         torch.cuda.synchronize()
         t_gemm_x += ev_start.elapsed_time(ev_stop)
