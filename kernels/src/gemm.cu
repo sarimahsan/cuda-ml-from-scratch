@@ -437,8 +437,9 @@ __global__ void gemm_split_k_double_buffered_kernel(const float* __restrict__ A,
     int cRow = blockIdx.y * BM;
     int cCol = blockIdx.x * BN;
 
-    // K-slice range for this block
-    int k_per_slice = (K + split_k - 1) / split_k;
+    // K-slice range for this block (k_per_slice aligned to BK for float4 load alignment)
+    int k_per_slice_raw = (K + split_k - 1) / split_k;
+    int k_per_slice = ((k_per_slice_raw + BK - 1) / BK) * BK; // round up to BK=8
     int k_start = blockIdx.z * k_per_slice;
     int k_end = min(k_start + k_per_slice, K);
     int slice_K = k_end - k_start;
