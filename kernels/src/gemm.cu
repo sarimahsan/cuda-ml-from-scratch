@@ -211,17 +211,17 @@ __global__ void gemm_NT_kernel(const float* __restrict__ A,
     int num_tiles = (K + TILE_DIM - 1) / TILE_DIM;
 
     for (int t = 0; t < num_tiles; ++t) {
-        int a_col = t * TILE_DIM + threadIdx.x;
-        int b_col = t * TILE_DIM + threadIdx.y; // note transposed B indexing
+        int a_k = t * TILE_DIM + threadIdx.x;
+        int b_k = t * TILE_DIM + threadIdx.y;
 
-        if (row < M && a_col < K) {
-            s_A[threadIdx.y][threadIdx.x] = A[row * K + a_col];
+        if (row < M && a_k < K) {
+            s_A[threadIdx.y][threadIdx.x] = A[row * K + a_k];
         } else {
             s_A[threadIdx.y][threadIdx.x] = 0.0f;
         }
 
-        if (col < N && b_col < K) {
-            s_B[threadIdx.y][threadIdx.x] = B[col * K + b_col];
+        if (col < N && b_k < K) {
+            s_B[threadIdx.y][threadIdx.x] = B[col * K + b_k];
         } else {
             s_B[threadIdx.y][threadIdx.x] = 0.0f;
         }
@@ -230,7 +230,7 @@ __global__ void gemm_NT_kernel(const float* __restrict__ A,
 
         #pragma unroll
         for (int k = 0; k < TILE_DIM; ++k) {
-            acc += s_A[threadIdx.y][k] * s_B[threadIdx.x][k];
+            acc += s_A[threadIdx.y][k] * s_B[k][threadIdx.x];
         }
 
         __syncthreads();
@@ -261,17 +261,17 @@ __global__ void gemm_TN_kernel(const float* __restrict__ A,
     int num_tiles = (K + TILE_DIM - 1) / TILE_DIM;
 
     for (int t = 0; t < num_tiles; ++t) {
-        int a_row = t * TILE_DIM + threadIdx.y;
-        int b_row = t * TILE_DIM + threadIdx.y;
+        int a_k = t * TILE_DIM + threadIdx.x;
+        int b_k = t * TILE_DIM + threadIdx.y;
 
-        if (a_row < K && row < M) {
-            s_A[threadIdx.y][threadIdx.x] = A[a_row * M + row];
+        if (row < M && a_k < K) {
+            s_A[threadIdx.y][threadIdx.x] = A[a_k * M + row];
         } else {
             s_A[threadIdx.y][threadIdx.x] = 0.0f;
         }
 
-        if (b_row < K && col < N) {
-            s_B[threadIdx.y][threadIdx.x] = B[b_row * N + col];
+        if (col < N && b_k < K) {
+            s_B[threadIdx.y][threadIdx.x] = B[b_k * N + col];
         } else {
             s_B[threadIdx.y][threadIdx.x] = 0.0f;
         }
@@ -280,7 +280,7 @@ __global__ void gemm_TN_kernel(const float* __restrict__ A,
 
         #pragma unroll
         for (int k = 0; k < TILE_DIM; ++k) {
-            acc += s_A[k][threadIdx.y] * s_B[k][threadIdx.x];
+            acc += s_A[threadIdx.y][k] * s_B[k][threadIdx.x];
         }
 
         __syncthreads();
