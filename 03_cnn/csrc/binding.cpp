@@ -9,6 +9,7 @@
 #include "../../kernels/include/softmax.cuh"
 #include "../../kernels/include/optimizers.cuh"
 #include "../../kernels/include/reduction.cuh"
+#include "../../kernels/include/elementwise.cuh"
 
 // Conv2D Forward
 torch::Tensor conv2d_forward_cuda(torch::Tensor X, torch::Tensor W, torch::Tensor b, int stride, int pad) {

@@ -7,6 +7,7 @@
 #include "../../kernels/include/softmax.cuh"
 #include "../../kernels/include/optimizers.cuh"
 #include "../../kernels/include/reduction.cuh"
+#include "../../kernels/include/elementwise.cuh"
 
 // Linear Forward: Z = X * W + b
 torch::Tensor linear_forward_cuda(torch::Tensor X, torch::Tensor W, torch::Tensor b) {
@@ -77,7 +78,7 @@ torch::Tensor gelu_backward_cuda(torch::Tensor dA, torch::Tensor Z) {
 
 torch::Tensor sigmoid_forward_cuda(torch::Tensor Z) {
     auto A = torch::empty_like(Z);
-    cuda_ml::kernels::sigmoid_forward(Z.data_ptr<float>(), A.da-ta_ptr<float>(), Z.numel(), at::cuda::getCurrentCUDAStream());
+    cuda_ml::kernels::sigmoid_forward(Z.data_ptr<float>(), A.data_ptr<float>(), Z.numel(), at::cuda::getCurrentCUDAStream());
     return A;
 }
 
