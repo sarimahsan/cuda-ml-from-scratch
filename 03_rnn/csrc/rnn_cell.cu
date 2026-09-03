@@ -62,5 +62,34 @@ __global__ void rnn_step_backward_kernel(const float* __restrict__ dh_total,
     }
 }
 
+// -----------------------------------------------------------------------------
+// Host Launchers
+// -----------------------------------------------------------------------------
+void launch_rnn_step_forward(const float* g_ih,
+                             const float* g_hh,
+                             const float* b_hh,
+                             float* h_out,
+                             int size,
+                             int H,
+                             int activation_type,
+                             cudaStream_t stream) {
+    int threads = 256;
+    int blocks = (size + threads - 1) / threads;
+    rnn_step_forward_kernel<<<blocks, threads, 0, stream>>>(
+        g_ih, g_hh, b_hh, h_out, size, H, activation_type);
+}
+
+void launch_rnn_step_backward(const float* dh_total,
+                              const float* h_t,
+                              float* dz_out,
+                              int size,
+                              int activation_type,
+                              cudaStream_t stream) {
+    int threads = 256;
+    int blocks = (size + threads - 1) / threads;
+    rnn_step_backward_kernel<<<blocks, threads, 0, stream>>>(
+        dh_total, h_t, dz_out, size, activation_type);
+}
+
 } // namespace rnn
 } // namespace cuda_ml

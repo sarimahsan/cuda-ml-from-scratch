@@ -23,19 +23,13 @@ std::vector<torch::Tensor> rnn_backward_sequence(
     int activation_type);
 
 // Forward declarations from rnn_cell.cu
-__global__ void rnn_step_forward_kernel(const float* __restrict__ g_ih,
-                                        const float* __restrict__ g_hh,
-                                        const float* __restrict__ b_hh,
-                                        float* __restrict__ h_out,
-                                        int size,
-                                        int H,
-                                        int activation_type);
+void launch_rnn_step_forward(const float* g_ih, const float* g_hh, const float* b_hh,
+                             float* h_out, int size, int H, int activation_type,
+                             cudaStream_t stream);
 
-__global__ void rnn_step_backward_kernel(const float* __restrict__ dh_total,
-                                         const float* __restrict__ h_t,
-                                         float* __restrict__ dz_out,
-                                         int size,
-                                         int activation_type);
+void launch_rnn_step_backward(const float* dh_total, const float* h_t,
+                              float* dz_out, int size, int activation_type,
+                              cudaStream_t stream);
 
 } // namespace rnn
 } // namespace cuda_ml
@@ -73,18 +67,17 @@ torch::Tensor rnn_cell_forward_cuda(
 
     // 2. Fused activation step
     int total_elements = N * H;
-    int threads = 256;
-    int blocks = (total_elements + threads - 1) / threads;
     const float* b_hh_ptr = (b_hh.defined() && b_hh.numel() > 0) ? b_hh.data_ptr<float>() : nullptr;
 
-    cuda_ml::rnn::rnn_step_forward_kernel<<<blocks, threads, 0, stream>>>(
+    cuda_ml::rnn::launch_rnn_step_forward(
         g_ih.data_ptr<float>(),
         g_hh.data_ptr<float>(),
         b_hh_ptr,
         h_out.data_ptr<float>(),
         total_elements,
         H,
-        activation_type
+        activation_type,
+        stream
     );
 
     return h_out;
@@ -119,14 +112,13 @@ std::vector<torch::Tensor> rnn_cell_backward_cuda(
 
     // 1. Elementwise step backward
     int total_elements = N * H;
-    int threads = 256;
-    int blocks = (total_elements + threads - 1) / threads;
-    cuda_ml::rnn::rnn_step_backward_kernel<<<blocks, threads, 0, stream>>>(
+    cuda_ml::rnn::launch_rnn_step_backward(
         dh_t.data_ptr<float>(),
         h_t.data_ptr<float>(),
         dz_t.data_ptr<float>(),
         total_elements,
-        activation_type
+        activation_type,
+        stream
     );
 
     // 2. Gradients via centralized GEMMs
