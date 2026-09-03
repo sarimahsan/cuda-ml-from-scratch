@@ -22,7 +22,7 @@ torch::Tensor gemm_tiled_torch(torch::Tensor A, torch::Tensor B) {
     int N = B.size(1);
 
     auto C = torch::empty({M, N}, A.options());
-    cuda_ml::kernels::gemm_tiled(
+    cuda_ml::kernels::gemm_register_tiled(
         A.data_ptr<float>(), B.data_ptr<float>(), C.data_ptr<float>(),
         M, N, K, 1.0f, 0.0f, at::cuda::getCurrentCUDAStream());
     return C;

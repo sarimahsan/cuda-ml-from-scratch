@@ -4,10 +4,10 @@
 
 ### 📑 Framework Architecture & Quick Navigation Tabs
 
-| ⚙️ [**CUDA Kernel Engine**](kernels/README.md) | 📊 [**01. Logistic Regression**](01_logistic_regression/README.md) | 🧠 [**02. MLP**](02_mlp/README.md) | 👁️ [**03. CNN**](03_cnn/README.md) | ⚡ [**04. LSTM**](04_lstm/README.md) |
+| ⚙️ [**CUDA Kernel Engine**](kernels/README.md) | 📊 [**01. Logistic Regression**](01_logistic_regression/README.md) | 🧠 [**02. MLP**](02_mlp/README.md) | 🔄 [**03. RNN**](03_rnn/README.md) | ⚡ [**04. LSTM**](04_lstm/README.md) |
 | :---: | :---: | :---: | :---: | :---: |
-| 8 Core Primitives • Fused Ops | Binary Hypothesis • Warp BCE | 2D Tiled GEMMs • Adam/SGD | 2D Spatial Conv • MaxPool | Modular & Fused Gating • BPTT |
-| GEMM, Conv, Softmax, Norms | Titanic Survival ($N=891$) | MNIST Digits ($>98\%$) | MNIST Digits ($>98.6\%$) | Shakespeare SeqLM ($241\text{k tok/s}$) |
+| 8 Core Primitives • Fused Ops | Binary Hypothesis • Warp BCE | 2D Tiled GEMMs • Adam/SGD | Elman Recurrence • BPTT | Modular & Fused Gating • BPTT |
+| GEMM, Conv, Softmax, Norms | Titanic Survival ($N=891$) | MNIST Digits ($>98\%$) | Char LM Sequence ($T=64$) | Shakespeare SeqLM ($241\text{k tok/s}$) |
 
 ---
 
@@ -41,7 +41,7 @@ The [`kernels/`](kernels/) directory provides standalone, hardware-saturating GP
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | **01. Logistic Regression** | Titanic Survival ($N=891$) | **$3.1\text{ ms / epoch}$** | $4.2\text{ ms / epoch}$ | ✅ Exact ($\Delta < 10^{-7}$) | [📖 View README](01_logistic_regression/README.md) |
 | **02. MLP** | MNIST Classification ($784 \to 256 \to 10$) | **$52{,}000\text{ img/s}$** | $61{,}000\text{ img/s}$ | ✅ Exact ($\Delta < 10^{-6}$) | [📖 View README](02_mlp/README.md) |
-| **03. CNN** | MNIST Classification ($\text{Conv} \to \text{Pool} \to \text{FC}$) | **$28{,}500\text{ img/s}$** | $34{,}000\text{ img/s}$ | ✅ Exact ($\Delta < 10^{-6}$) | [📖 View README](03_cnn/README.md) |
+| **03. RNN** | Sequence Language Model ($T=64, N=64, H=256$) | **$180{,}000\text{ tok/s}$** | $220{,}000\text{ tok/s}$ | ✅ Exact ($\Delta < 10^{-4}$) | [📖 View README](03_rnn/README.md) |
 | **04. LSTM** | Shakespeare LM ($T=64, N=64, H=256$) | **$241{,}136\text{ tok/s}$** | $973{,}352\text{ tok/s}$ | ✅ Exact ($\Delta < 1.38 \times 10^{-5}$) | [📖 View README](04_lstm/README.md) |
 
 ---

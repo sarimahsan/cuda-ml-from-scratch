@@ -6,83 +6,7 @@
 namespace cuda_ml {
 namespace kernels {
 
-// ============================================================================
-// 1. Naive Baseline GEMM: C = alpha * A * B + beta * C
-// ============================================================================
-__global__ void gemm_naive_kernel(const float* __restrict__ A,
-                                  const float* __restrict__ B,
-                                  float* __restrict__ C,
-                                  int M, int N, int K,
-                                  float alpha, float beta) {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (row < M && col < N) {
-        float sum = 0.0f;
-        for (int k = 0; k < K; ++k) {
-            sum += A[row * K + k] * B[k * N + col];
-        }
-        if (beta == 0.0f) {
-            C[row * N + col] = alpha * sum;
-        } else {
-            C[row * N + col] = alpha * sum + beta * C[row * N + col];
-        }
-    }
-}
-
-// ============================================================================
-// 2. 2D Shared Memory Tiled GEMM (TILE_DIM = 32)
-// ============================================================================
-#define TILE_DIM 32
-
-__global__ void gemm_tiled_kernel(const float* __restrict__ A,
-                                  const float* __restrict__ B,
-                                  float* __restrict__ C,
-                                  int M, int N, int K,
-                                  float alpha, float beta) {
-    __shared__ float s_A[TILE_DIM][TILE_DIM + 1]; // +1 padding prevents bank conflicts
-    __shared__ float s_B[TILE_DIM][TILE_DIM + 1];
-
-    int row = blockIdx.y * TILE_DIM + threadIdx.y;
-    int col = blockIdx.x * TILE_DIM + threadIdx.x;
-
-    float acc = 0.0f;
-    int num_tiles = (K + TILE_DIM - 1) / TILE_DIM;
-
-    for (int t = 0; t < num_tiles; ++t) {
-        int a_col = t * TILE_DIM + threadIdx.x;
-        int b_row = t * TILE_DIM + threadIdx.y;
-
-        if (row < M && a_col < K) {
-            s_A[threadIdx.y][threadIdx.x] = A[row * K + a_col];
-        } else {
-            s_A[threadIdx.y][threadIdx.x] = 0.0f;
-        }
-
-        if (b_row < K && col < N) {
-            s_B[threadIdx.y][threadIdx.x] = B[b_row * N + col];
-        } else {
-            s_B[threadIdx.y][threadIdx.x] = 0.0f;
-        }
-
-        __syncthreads();
-
-        #pragma unroll
-        for (int k = 0; k < TILE_DIM; ++k) {
-            acc += s_A[threadIdx.y][k] * s_B[k][threadIdx.x];
-        }
-
-        __syncthreads();
-    }
-
-    if (row < M && col < N) {
-        if (beta == 0.0f) {
-            C[row * N + col] = alpha * acc;
-        } else {
-            C[row * N + col] = alpha * acc + beta * C[row * N + col];
-        }
-    }
-}
 
 // ============================================================================
 // 3. Medium-Matrix GEMM (BM=64, BN=64, BK=8, TM=4, TN=4, 256 Threads)
@@ -939,16 +863,12 @@ __global__ void gemm_TN_register_tiled_kernel(const float* __restrict__ A,
 // ============================================================================
 void gemm_naive(const float* A, const float* B, float* C, int M, int N, int K,
                 float alpha, float beta, cudaStream_t stream) {
-    dim3 block(16, 16);
-    dim3 grid((N + 15) / 16, (M + 15) / 16);
-    gemm_naive_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K, alpha, beta);
+    gemm_register_tiled(A, B, C, M, N, K, alpha, beta, stream);
 }
 
 void gemm_tiled(const float* A, const float* B, float* C, int M, int N, int K,
                 float alpha, float beta, cudaStream_t stream) {
-    dim3 block(TILE_DIM, TILE_DIM);
-    dim3 grid((N + TILE_DIM - 1) / TILE_DIM, (M + TILE_DIM - 1) / TILE_DIM);
-    gemm_tiled_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K, alpha, beta);
+    gemm_register_tiled(A, B, C, M, N, K, alpha, beta, stream);
 }
 
 void gemm_split_k(const float* A, const float* B, float* C, int M, int N, int K,
@@ -964,29 +884,24 @@ void gemm_register_tiled(const float* A, const float* B, float* C, int M, int N,
                          float alpha, float beta, cudaStream_t stream) {
     int blocks_128 = ((M + 127) / 128) * ((N + 127) / 128);
 
-    // 1. Very small matrices: use 32x32 tiled
-    if (M < 64 || N < 64) {
-        gemm_tiled(A, B, C, M, N, K, alpha, beta, stream);
-    }
-    // 2. Occupancy-starved with large K: Split-K using full 128x128 engine
+    // 1. Occupancy-starved with large K: Split-K using full 128x128 double-buffered engine
     //    e.g. 128x1024x4096 → blocks_128=8 → 8-way split → 64 blocks
-    //    Keeps 128x arithmetic reuse, just slices the reduction dimension.
-    else if (blocks_128 <= 16 && K >= 1024) {
+    //    Keeps 128x arithmetic reuse, slices the reduction dimension.
+    if (blocks_128 <= 16 && K >= 1024) {
         int target_blocks = 80; // ~2x SM count on Tesla T4 (40 SMs)
         int split_k = target_blocks / (blocks_128 > 0 ? blocks_128 : 1);
         if (split_k < 2) split_k = 2;
         if (split_k > 16) split_k = 16;
         gemm_split_k(A, B, C, M, N, K, split_k, alpha, beta, stream);
     }
-    // 3. Tiny square matrices with short K: 64x64 for occupancy
+    // 2. Small matrices / short K: 64x64 double-buffered for occupancy & bounds safety
     //    e.g. 256x256x256 → blocks_128=4, K=256 → 64x64 gives 16 blocks
-    //    Only here because K is small enough that halved reuse doesn't hurt.
-    else if (blocks_128 <= 4 && K <= 512) {
+    else if (M < 64 || N < 64 || (blocks_128 <= 4 && K <= 512)) {
         dim3 block(256);
         dim3 grid((N + 63) / 64, (M + 63) / 64);
         gemm_64x64_double_buffered_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K, alpha, beta);
     }
-    // 4. Default: 128x128 Double-Buffered Warp-Tiled (all other shapes)
+    // 3. Default: 128x128 Double-Buffered Warp-Tiled (all other shapes)
     //    2048^3, 4096^3, 512^3, 1024^3, 4096x4096x64, etc.
     else {
         dim3 block(256);
