@@ -32,8 +32,5 @@ void dropout_forward(const float* X, float* Y, uint8_t* mask, int N, float p,
 void dropout_backward(const float* dY, const uint8_t* mask, float* dX, int N, float p,
                       cudaStream_t stream = 0);
 
-// 7. Parameter Clipping (L2 Norm Clipping)
-void clip_grad_norm(float* grad, int N, float max_norm, float actual_norm, cudaStream_t stream = 0);
-
 } // namespace kernels
 } // namespace cuda_ml
