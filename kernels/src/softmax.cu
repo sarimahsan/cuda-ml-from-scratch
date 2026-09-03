@@ -17,9 +17,9 @@ __global__ void softmax_forward_kernel(const float* __restrict__ logits,
         const float* row_logits = logits + row * C;
         float* row_probs = probs + row * C;
 
-        int c4 = C / 4;
-        const float4* row_logits4 = reinterpret_cast<const float4*>(row_logits);
-        float4* row_probs4 = reinterpret_cast<float4*>(row_probs);
+        int c4 = ((C & 3) == 0) ? (C / 4) : 0;
+        const float4* row_logits4 = (c4 > 0) ? reinterpret_cast<const float4*>(row_logits) : nullptr;
+        float4* row_probs4 = (c4 > 0) ? reinterpret_cast<float4*>(row_probs) : nullptr;
 
         // Step 1: Find row maximum using float4 vectorized loads
         float max_val = -1e20f;
@@ -73,9 +73,9 @@ __global__ void online_safe_softmax_kernel(const float* __restrict__ logits,
         const float* row_logits = logits + row * C;
         float* row_probs = probs + row * C;
 
-        int c4 = C / 4;
-        const float4* row_logits4 = reinterpret_cast<const float4*>(row_logits);
-        float4* row_probs4 = reinterpret_cast<float4*>(row_probs);
+        int c4 = ((C & 3) == 0) ? (C / 4) : 0;
+        const float4* row_logits4 = (c4 > 0) ? reinterpret_cast<const float4*>(row_logits) : nullptr;
+        float4* row_probs4 = (c4 > 0) ? reinterpret_cast<float4*>(row_probs) : nullptr;
 
         float m_i = -1e20f;
         float d_i = 0.0f;

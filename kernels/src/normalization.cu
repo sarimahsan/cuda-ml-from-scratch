@@ -21,11 +21,11 @@ __global__ void layernorm_forward_kernel(const float* __restrict__ X,
         const float* row_x = X + row * D;
         float* row_y = Y + row * D;
 
-        int d4 = D / 4;
-        const float4* row_x4 = reinterpret_cast<const float4*>(row_x);
-        float4* row_y4 = reinterpret_cast<float4*>(row_y);
-        const float4* gamma4 = gamma ? reinterpret_cast<const float4*>(gamma) : nullptr;
-        const float4* beta4  = beta  ? reinterpret_cast<const float4*>(beta)  : nullptr;
+        int d4 = ((D & 3) == 0) ? (D / 4) : 0;
+        const float4* row_x4 = (d4 > 0) ? reinterpret_cast<const float4*>(row_x) : nullptr;
+        float4* row_y4 = (d4 > 0) ? reinterpret_cast<float4*>(row_y) : nullptr;
+        const float4* gamma4 = (gamma && d4 > 0) ? reinterpret_cast<const float4*>(gamma) : nullptr;
+        const float4* beta4  = (beta && d4 > 0)  ? reinterpret_cast<const float4*>(beta)  : nullptr;
 
         // Register cache for up to D = 1024 (8 float4s per thread)
         constexpr int MAX_VECS = 8;

@@ -248,6 +248,10 @@ __global__ void gemm_double_buffered_warp_tiled_kernel(const float* __restrict__
     // 64 register accumulators
     float r_c[TM][TN] = {0.0f};
 
+    // Alignment flags: float4 requires 16-byte alignment → linear index must be multiple of 4
+    const bool vec_K = ((K & 3) == 0);  // A loads safe when K is 4-aligned
+    const bool vec_N = ((N & 3) == 0);  // B loads and C stores safe when N is 4-aligned
+
     // Vectorized load helper indices (256 threads loading 1024 elements = float4 per thread)
     int a_load_row = threadIdx.x / 2;
     int a_load_col = (threadIdx.x % 2) * 4;
@@ -257,7 +261,7 @@ __global__ void gemm_double_buffered_warp_tiled_kernel(const float* __restrict__
 
     // Helper lambda for loading 1 float4 tile into shared memory buffer
     auto load_tile = [&](int buffer_idx, int bk) {
-        if (cRow + a_load_row < M && bk + a_load_col + 3 < K) {
+        if (vec_K && cRow + a_load_row < M && bk + a_load_col + 3 < K) {
             float4 a_val = __ldg(reinterpret_cast<const float4*>(&A[(cRow + a_load_row) * K + (bk + a_load_col)]));
             s_A[buffer_idx][a_load_row][a_load_col + 0] = a_val.x;
             s_A[buffer_idx][a_load_row][a_load_col + 1] = a_val.y;
@@ -274,7 +278,7 @@ __global__ void gemm_double_buffered_warp_tiled_kernel(const float* __restrict__
             }
         }
 
-        if (bk + b_load_row < K && cCol + b_load_col + 3 < N) {
+        if (vec_N && bk + b_load_row < K && cCol + b_load_col + 3 < N) {
             float4 b_val = __ldg(reinterpret_cast<const float4*>(&B[(bk + b_load_row) * N + (cCol + b_load_col)]));
             s_B[buffer_idx][b_load_row][b_load_col + 0] = b_val.x;
             s_B[buffer_idx][b_load_row][b_load_col + 1] = b_val.y;
@@ -309,7 +313,7 @@ __global__ void gemm_double_buffered_warp_tiled_kernel(const float* __restrict__
 
         // 1. Asynchronously prefetch next tile into local thread registers
         if (t + 1 < num_tiles) {
-            if (cRow + a_load_row < M && next_bk + a_load_col + 3 < K) {
+            if (vec_K && cRow + a_load_row < M && next_bk + a_load_col + 3 < K) {
                 a_prefetch = __ldg(reinterpret_cast<const float4*>(&A[(cRow + a_load_row) * K + (next_bk + a_load_col)]));
             } else {
                 #pragma unroll
@@ -324,7 +328,7 @@ __global__ void gemm_double_buffered_warp_tiled_kernel(const float* __restrict__
                 }
             }
 
-            if (next_bk + b_load_row < K && cCol + b_load_col + 3 < N) {
+            if (vec_N && next_bk + b_load_row < K && cCol + b_load_col + 3 < N) {
                 b_prefetch = __ldg(reinterpret_cast<const float4*>(&B[(next_bk + b_load_row) * N + (cCol + b_load_col)]));
             } else {
                 #pragma unroll
@@ -390,7 +394,7 @@ __global__ void gemm_double_buffered_warp_tiled_kernel(const float* __restrict__
             int g_row = cRow + threadRowInBlock + i;
             int g_col = cCol + threadColInBlock + j;
 
-            if (g_row < M && g_col + 3 < N) {
+            if (vec_N && g_row < M && g_col + 3 < N) {
                 float4 c_out;
                 if (beta == 0.0f) {
                     c_out.x = alpha * r_c[i][j + 0];
@@ -457,6 +461,9 @@ __global__ void gemm_split_k_double_buffered_kernel(const float* __restrict__ A,
 
     float r_c[TM][TN] = {0.0f};
 
+    const bool vec_K = ((K & 3) == 0);
+    const bool vec_N = ((N & 3) == 0);
+
     int a_load_row = threadIdx.x / 2;
     int a_load_col = (threadIdx.x % 2) * 4;
     int b_load_row = threadIdx.x / 32;
@@ -464,7 +471,7 @@ __global__ void gemm_split_k_double_buffered_kernel(const float* __restrict__ A,
 
     // Lambda for loading a tile into shared memory (bounds-checked against k_end)
     auto load_tile_sk = [&](int buffer_idx, int bk) {
-        if (cRow + a_load_row < M && bk + a_load_col + 3 < k_end) {
+        if (vec_K && cRow + a_load_row < M && bk + a_load_col + 3 < k_end) {
             float4 a_val = __ldg(reinterpret_cast<const float4*>(&A[(cRow + a_load_row) * K + (bk + a_load_col)]));
             s_A[buffer_idx][a_load_row][a_load_col + 0] = a_val.x;
             s_A[buffer_idx][a_load_row][a_load_col + 1] = a_val.y;
@@ -479,7 +486,7 @@ __global__ void gemm_split_k_double_buffered_kernel(const float* __restrict__ A,
                     s_A[buffer_idx][a_load_row][a_load_col + i] = 0.0f;
             }
         }
-        if (bk + b_load_row < k_end && cCol + b_load_col + 3 < N) {
+        if (vec_N && bk + b_load_row < k_end && cCol + b_load_col + 3 < N) {
             float4 b_val = __ldg(reinterpret_cast<const float4*>(&B[(bk + b_load_row) * N + (cCol + b_load_col)]));
             s_B[buffer_idx][b_load_row][b_load_col + 0] = b_val.x;
             s_B[buffer_idx][b_load_row][b_load_col + 1] = b_val.y;
@@ -511,7 +518,7 @@ __global__ void gemm_split_k_double_buffered_kernel(const float* __restrict__ A,
         float4 b_prefetch = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
         if (t + 1 < num_tiles) {
-            if (cRow + a_load_row < M && next_bk + a_load_col + 3 < k_end) {
+            if (vec_K && cRow + a_load_row < M && next_bk + a_load_col + 3 < k_end) {
                 a_prefetch = __ldg(reinterpret_cast<const float4*>(&A[(cRow + a_load_row) * K + (next_bk + a_load_col)]));
             } else {
                 #pragma unroll
@@ -525,7 +532,7 @@ __global__ void gemm_split_k_double_buffered_kernel(const float* __restrict__ A,
                     else a_prefetch.w = v;
                 }
             }
-            if (next_bk + b_load_row < k_end && cCol + b_load_col + 3 < N) {
+            if (vec_N && next_bk + b_load_row < k_end && cCol + b_load_col + 3 < N) {
                 b_prefetch = __ldg(reinterpret_cast<const float4*>(&B[(next_bk + b_load_row) * N + (cCol + b_load_col)]));
             } else {
                 #pragma unroll
@@ -613,6 +620,9 @@ __global__ void gemm_NT_register_tiled_kernel(const float* __restrict__ A,
 
     float r_c[TM][TN] = {0.0f};
 
+    const bool vec_K = ((K & 3) == 0);
+    const bool vec_N = ((N & 3) == 0);
+
     // A: MxK row-major — same load pattern as NN
     int a_load_row = threadIdx.x / 2;   // 0..127
     int a_load_col = (threadIdx.x % 2) * 4; // 0 or 4
@@ -626,7 +636,7 @@ __global__ void gemm_NT_register_tiled_kernel(const float* __restrict__ A,
 
     auto load_tile_nt = [&](int buffer_idx, int bk) {
         // A load: A[cRow+a_load_row, bk+a_load_col] (row-major)
-        if (cRow + a_load_row < M && bk + a_load_col + 3 < K) {
+        if (vec_K && cRow + a_load_row < M && bk + a_load_col + 3 < K) {
             float4 a_val = __ldg(reinterpret_cast<const float4*>(&A[(cRow + a_load_row) * K + (bk + a_load_col)]));
             s_A[buffer_idx][a_load_row][a_load_col + 0] = a_val.x;
             s_A[buffer_idx][a_load_row][a_load_col + 1] = a_val.y;
@@ -671,7 +681,7 @@ __global__ void gemm_NT_register_tiled_kernel(const float* __restrict__ A,
         float b_pref[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
         if (t + 1 < num_tiles) {
-            if (cRow + a_load_row < M && next_bk + a_load_col + 3 < K) {
+            if (vec_K && cRow + a_load_row < M && next_bk + a_load_col + 3 < K) {
                 a_prefetch = __ldg(reinterpret_cast<const float4*>(&A[(cRow + a_load_row) * K + (next_bk + a_load_col)]));
             } else {
                 #pragma unroll
@@ -727,7 +737,7 @@ __global__ void gemm_NT_register_tiled_kernel(const float* __restrict__ A,
         for (int j = 0; j < TN; j += 4) {
             int g_row = cRow + threadRowInBlock + i;
             int g_col = cCol + threadColInBlock + j;
-            if (g_row < M && g_col + 3 < N) {
+            if (vec_N && g_row < M && g_col + 3 < N) {
                 float4 c_out;
                 if (beta == 0.0f) {
                     c_out.x = alpha * r_c[i][j + 0];
@@ -782,6 +792,8 @@ __global__ void gemm_TN_register_tiled_kernel(const float* __restrict__ A,
 
     float r_c[TM][TN] = {0.0f};
 
+    const bool vec_N = ((N & 3) == 0);
+
     // A: KxM col-major (A^T is MxK) — s_A[m][k] = A[k*M + (cRow+m)]
     // Load pattern: 256 threads load BM×BK = 128×8 elements
     // a_load_row = M-dim index (0..127), a_load_col = K-dim index
@@ -805,7 +817,7 @@ __global__ void gemm_TN_register_tiled_kernel(const float* __restrict__ A,
         }
 
         // B load: B[bk+b_load_row, cCol+b_load_col] (row-major, contiguous along N)
-        if (bk + b_load_row < K && cCol + b_load_col + 3 < N) {
+        if (vec_N && bk + b_load_row < K && cCol + b_load_col + 3 < N) {
             float4 b_val = __ldg(reinterpret_cast<const float4*>(&B[(bk + b_load_row) * N + (cCol + b_load_col)]));
             s_B[buffer_idx][b_load_row][b_load_col + 0] = b_val.x;
             s_B[buffer_idx][b_load_row][b_load_col + 1] = b_val.y;
@@ -842,7 +854,7 @@ __global__ void gemm_TN_register_tiled_kernel(const float* __restrict__ A,
                 if (cRow + a_load_row < M && next_bk + a_load_col + i < K)
                     a_pref[i] = A[(next_bk + a_load_col + i) * M + (cRow + a_load_row)];
             }
-            if (next_bk + b_load_row < K && cCol + b_load_col + 3 < N) {
+            if (vec_N && next_bk + b_load_row < K && cCol + b_load_col + 3 < N) {
                 b_prefetch = __ldg(reinterpret_cast<const float4*>(&B[(next_bk + b_load_row) * N + (cCol + b_load_col)]));
             } else {
                 #pragma unroll
@@ -893,7 +905,7 @@ __global__ void gemm_TN_register_tiled_kernel(const float* __restrict__ A,
         for (int j = 0; j < TN; j += 4) {
             int g_row = cRow + threadRowInBlock + i;
             int g_col = cCol + threadColInBlock + j;
-            if (g_row < M && g_col + 3 < N) {
+            if (vec_N && g_row < M && g_col + 3 < N) {
                 float4 c_out;
                 if (beta == 0.0f) {
                     c_out.x = alpha * r_c[i][j + 0];
