@@ -199,11 +199,37 @@ def benchmark_macro_throughput(seq_len=64, batch_size=64, input_dim=128, hidden_
 
 
 
+def init_and_warmup_cuda(device: str = "cuda"):
+    """
+    Explicitly initializes CUDA runtime, primary context, and PyTorch's internal cuBLAS / cuDNN handle pool.
+    Runs warmup kernel & backward passes to prevent lazy-initialization jitter from contaminating microbenchmarks.
+    """
+    if not torch.cuda.is_available() or device == "cpu":
+        return
+    torch.cuda.init()
+    torch.cuda.synchronize()
+
+    dummy_x = torch.randn(16, 4, 32, device=device, requires_grad=True)
+    dummy_lstm = nn.LSTM(32, 64, num_layers=1, batch_first=False).to(device)
+    for _ in range(50):
+        dummy_out, _ = dummy_lstm(dummy_x)
+        dummy_loss = dummy_out.sum()
+        dummy_loss.backward()
+        torch.cuda.synchronize()
+
+    del dummy_x, dummy_lstm, dummy_out, dummy_loss
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Modular CUDA LSTM Benchmark Suite")
     parser.add_argument("--quick", action="store_true", help="Run quick benchmark")
     parser.add_argument("--device", type=str, default="cuda", help="Device (default: cuda)")
     args = parser.parse_args()
+
+    # Initialize CUDA context and warm up cuBLAS / cuDNN
+    init_and_warmup_cuda(device=args.device)
 
     benchmark_numerical_parity(device=args.device)
 

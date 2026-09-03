@@ -52,6 +52,20 @@ def main():
     if not torch.cuda.is_available():
         print("CUDA is not available. Please run on a GPU-enabled machine.")
         return
+
+    # Explicitly initialize CUDA runtime, primary context, and cuBLAS handle pool
+    torch.cuda.init()
+    torch.cuda.synchronize()
+
+    dummy_a = torch.randn(256, 256, device="cuda", requires_grad=True)
+    dummy_b = torch.randn(256, 256, device="cuda", requires_grad=True)
+    for _ in range(50):
+        dummy_c = torch.matmul(dummy_a, dummy_b)
+        dummy_c.sum().backward()
+        torch.cuda.synchronize()
+    del dummy_a, dummy_b, dummy_c
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
         
     print("\n" + "=" * 95)
     print("🚀 CUDA Kernel Engine: Micro-Benchmark Suite vs PyTorch Native Operations")

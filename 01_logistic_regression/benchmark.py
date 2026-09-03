@@ -454,6 +454,29 @@ def benchmark_memory(N: int = 1_000_000, D: int = 128, device: str = "cuda"):
     print("=" * 80)
 
 
+def init_and_warmup_cuda(device: str = "cuda"):
+    """
+    Explicitly initializes CUDA runtime, primary context, and PyTorch's internal cuBLAS / Autograd handle pool.
+    Runs warmup kernel & backward passes to prevent lazy-initialization jitter from contaminating microbenchmarks.
+    """
+    if not torch.cuda.is_available() or device == "cpu":
+        return
+    torch.cuda.init()
+    torch.cuda.synchronize()
+
+    dummy_x = torch.randn(256, 64, device=device, requires_grad=True)
+    dummy_w = torch.randn(64, 1, device=device, requires_grad=True)
+    for _ in range(50):
+        dummy_y = torch.sigmoid(torch.matmul(dummy_x, dummy_w))
+        dummy_loss = dummy_y.sum()
+        dummy_loss.backward()
+        torch.cuda.synchronize()
+
+    del dummy_x, dummy_w, dummy_y, dummy_loss
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+
+
 # ---------------------------------------------------------------------------
 # Main Entrypoint
 # ---------------------------------------------------------------------------
@@ -466,6 +489,9 @@ def main():
     if not torch.cuda.is_available():
         print("[ERROR] CUDA is not available. Please run on a GPU-enabled runtime (e.g. Google Colab).")
         sys.exit(1)
+
+    # Initialize CUDA context and warm up cuBLAS before timing
+    init_and_warmup_cuda(device=args.device)
 
     device_name = torch.cuda.get_device_name(0)
     device_props = torch.cuda.get_device_properties(0)

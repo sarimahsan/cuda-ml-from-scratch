@@ -265,8 +265,32 @@ def benchmark_memory(device: str = "cuda", B: int = 128):
     print("=" * 80)
 
 
+def init_and_warmup_cuda(device: str = "cuda"):
+    """
+    Explicitly initializes CUDA runtime, primary context, and PyTorch's internal cuBLAS / cuDNN handle pool.
+    Runs warmup kernel & backward passes to prevent lazy-initialization jitter from contaminating microbenchmarks.
+    """
+    if not torch.cuda.is_available() or device == "cpu":
+        return
+    torch.cuda.init()
+    torch.cuda.synchronize()
+
+    # Warm up CUDA driver, memory allocator, cuDNN Conv2D, cuBLAS GEMM, and Autograd engines
+    dummy_x = torch.randn(4, 16, 28, 28, device=device, requires_grad=True)
+    dummy_conv = nn.Conv2d(16, 32, kernel_size=3, padding=1, device=device)
+    for _ in range(50):
+        dummy_y = dummy_conv(dummy_x)
+        dummy_loss = dummy_y.sum()
+        dummy_loss.backward()
+        torch.cuda.synchronize()
+
+    del dummy_x, dummy_conv, dummy_y, dummy_loss
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Modular CUDA CNN Benchmarking Suite")
+    parser = argparse.ArgumentParser(description="CUDA ML vs PyTorch CNN Benchmark")
     parser.add_argument("--device", type=str, default="cuda", help="Target device (cuda or cpu)")
     parser.add_argument("--quick", action="store_true", help="Run a quick version with fewer iterations")
     parser.add_argument("--all", action="store_true", help="Run all benchmarks")
@@ -276,6 +300,9 @@ def main():
     if not torch.cuda.is_available():
         print("[ERROR] CUDA is not available. Benchmark requires NVIDIA GPU.")
         sys.exit(1)
+
+    # Initialize CUDA context and warm up cuBLAS / cuDNN
+    init_and_warmup_cuda(device=args.device)
 
     device_name = torch.cuda.get_device_name(0)
     device_props = torch.cuda.get_device_properties(0)
