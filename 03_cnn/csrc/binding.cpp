@@ -172,13 +172,14 @@ std::vector<torch::Tensor> softmax_cross_entropy_cuda(torch::Tensor logits, torc
 
     auto loss = torch::zeros({1}, logits.options());
     auto dLogits = torch::empty_like(logits);
+    auto probs = torch::empty_like(logits);
 
     cuda_ml::kernels::fused_softmax_cross_entropy_forward_backward(
         logits.data_ptr<float>(), targets.data_ptr<int64_t>(),
-        loss.data_ptr<float>(), dLogits.data_ptr<float>(),
+        loss.data_ptr<float>(), dLogits.data_ptr<float>(), probs.data_ptr<float>(),
         N, C, at::cuda::getCurrentCUDAStream());
 
-    return {loss, dLogits};
+    return {probs, loss, dLogits};
 }
 
 // Optimizers

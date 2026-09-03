@@ -123,7 +123,7 @@ class CUDAReLUFunction(torch.autograd.Function):
 class CUDASoftmaxCrossEntropyFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, logits: torch.Tensor, targets: torch.Tensor):
-        loss, probs, dZ = _ext.softmax_cross_entropy(logits, targets)
+        probs, loss, dZ = _ext.softmax_cross_entropy(logits, targets)
         ctx.save_for_backward(dZ)
         ctx.probs = probs
         return loss, probs

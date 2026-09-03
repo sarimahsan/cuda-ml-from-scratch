@@ -202,6 +202,7 @@ __global__ void fused_softmax_ce_kernel(const float* __restrict__ logits,
                                         const int64_t* __restrict__ targets,
                                         float* __restrict__ loss,
                                         float* __restrict__ dLogits,
+                                        float* __restrict__ probs,
                                         int N, int C) {
     int row = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
     int lane = threadIdx.x % 32;
@@ -209,6 +210,7 @@ __global__ void fused_softmax_ce_kernel(const float* __restrict__ logits,
     if (row < N) {
         const float* row_logits = logits + row * C;
         float* row_dLogits = dLogits + row * C;
+        float* row_probs = probs ? (probs + row * C) : nullptr;
         int64_t target = targets[row];
 
         float max_val = -1e20f;
@@ -227,9 +229,12 @@ __global__ void fused_softmax_ce_kernel(const float* __restrict__ logits,
 
         float inv_sum = 1.0f / (sum_exp + 1e-12f);
 
-        // Gradient: dLogits = (p_i - 1_{i=target}) / N
+        // Gradient & Probs: dLogits = (p_i - 1_{i=target}) / N
         for (int c = lane; c < C; c += 32) {
             float p = expf(row_logits[c] - max_val) * inv_sum;
+            if (row_probs != nullptr) {
+                row_probs[c] = p;
+            }
             float indicator = (c == target) ? 1.0f : 0.0f;
             row_dLogits[c] = (p - indicator) / (float)N;
         }
@@ -274,13 +279,13 @@ void softmax_backward(const float* dProbs, const float* probs, float* dLogits,
 }
 
 void fused_softmax_cross_entropy_forward_backward(const float* logits, const int64_t* targets,
-                                                  float* loss, float* dLogits,
+                                                  float* loss, float* dLogits, float* probs,
                                                   int N, int C, cudaStream_t stream) {
     CUDA_CHECK(cudaMemsetAsync(loss, 0, sizeof(float), stream));
     int threads = 256;
     int warps_per_block = threads / 32;
     int blocks = (N + warps_per_block - 1) / warps_per_block;
-    fused_softmax_ce_kernel<<<blocks, threads, 0, stream>>>(logits, targets, loss, dLogits, N, C);
+    fused_softmax_ce_kernel<<<blocks, threads, 0, stream>>>(logits, targets, loss, dLogits, probs, N, C);
 }
 
 } // namespace kernels
