@@ -23,7 +23,11 @@ void gemm_tiled(const float* A, const float* B, float* C, int M, int N, int K,
 void gemm_register_tiled(const float* A, const float* B, float* C, int M, int N, int K,
                          float alpha = 1.0f, float beta = 0.0f, cudaStream_t stream = 0);
 
-// 4. Batched GEMM for Sequence / Multi-Head Operations: (B x M x K) * (B x K x N)
+// 4. Split-K GEMM for Reduction-Heavy Shapes (K >> M, N)
+void gemm_split_k(const float* A, const float* B, float* C, int M, int N, int K,
+                  int split_k = 8, float alpha = 1.0f, float beta = 0.0f, cudaStream_t stream = 0);
+
+// 5. Batched GEMM for Sequence / Multi-Head Operations: (B x M x K) * (B x K x N)
 void gemm_batched(const float* A, const float* B, float* C, int batch_size,
                  int M, int N, int K, float alpha = 1.0f, float beta = 0.0f,
                  cudaStream_t stream = 0);

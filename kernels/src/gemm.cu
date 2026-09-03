@@ -1,11 +1,14 @@
 #include "../include/gemm.cuh"
 #include "../../00_common/include/cuda_utils.cuh"
 #include "../../00_common/include/warp_primitives.cuh"
+#include <cmath>
 
 namespace cuda_ml {
 namespace kernels {
 
-// 1. Naive GEMM: C = alpha * A * B + beta * C
+// ============================================================================
+// 1. Naive Baseline GEMM: C = alpha * A * B + beta * C
+// ============================================================================
 __global__ void gemm_naive_kernel(const float* __restrict__ A,
                                   const float* __restrict__ B,
                                   float* __restrict__ C,
@@ -27,7 +30,9 @@ __global__ void gemm_naive_kernel(const float* __restrict__ A,
     }
 }
 
-// 2. 2D Shared Memory Tiled GEMM with bank conflict padding (TILE_DIM = 32)
+// ============================================================================
+// 2. 2D Shared Memory Tiled GEMM (TILE_DIM = 32)
+// ============================================================================
 #define TILE_DIM 32
 
 __global__ void gemm_tiled_kernel(const float* __restrict__ A,
@@ -42,7 +47,6 @@ __global__ void gemm_tiled_kernel(const float* __restrict__ A,
     int col = blockIdx.x * TILE_DIM + threadIdx.x;
 
     float acc = 0.0f;
-
     int num_tiles = (K + TILE_DIM - 1) / TILE_DIM;
 
     for (int t = 0; t < num_tiles; ++t) {
@@ -80,77 +84,139 @@ __global__ void gemm_tiled_kernel(const float* __restrict__ A,
     }
 }
 
-// 3. Register Tiled GEMM: BM=128, BN=128, BK=8, TM=8, TN=8 with 128-bit Vectorization
+// ============================================================================
+// 3. High-Performance GEMM: Double Buffering + Warp Tiling + Vectorized Epilogue
+// Tile: BM=128, BN=128, BK=8 | Warp: 64x32 (8 warps) | Thread: TM=8, TN=8
+// ============================================================================
 #define BM 128
 #define BN 128
 #define BK 8
 #define TM 8
 #define TN 8
 
-__global__ void gemm_register_tiled_kernel(const float* __restrict__ A,
-                                           const float* __restrict__ B,
-                                           float* __restrict__ C,
-                                           int M, int N, int K,
-                                           float alpha, float beta) {
-    __shared__ float s_A[BM][BK + 1];
-    __shared__ float s_B[BK][BN + 1];
+__global__ void gemm_double_buffered_warp_tiled_kernel(const float* __restrict__ A,
+                                                      const float* __restrict__ B,
+                                                      float* __restrict__ C,
+                                                      int M, int N, int K,
+                                                      float alpha, float beta) {
+    // Ping-pong shared memory buffers
+    __shared__ float s_A[2][BM][BK + 1];
+    __shared__ float s_B[2][BK][BN + 1];
 
     int cRow = blockIdx.y * BM;
     int cCol = blockIdx.x * BN;
 
-    // 256 threads arranged as 16x16 grid, each computing 8x8 output elements
-    int threadRow = (threadIdx.x / 16) * TM;
-    int threadCol = (threadIdx.x % 16) * TN;
+    // Warp and Lane hierarchy (8 warps arranged as 2x4 grid of 64x32 warp tiles)
+    int warpId = threadIdx.x / 32;
+    int laneId = threadIdx.x % 32;
 
+    int warpRow = (warpId / 4) * 64;
+    int warpCol = (warpId % 4) * 32;
+
+    int laneRow = (laneId / 4) * TM;
+    int laneCol = (laneId % 4) * TN;
+
+    int threadRowInBlock = warpRow + laneRow;
+    int threadColInBlock = warpCol + laneCol;
+
+    // 64 register accumulators
     float r_c[TM][TN] = {0.0f};
 
-    // Vectorized load indices for 256 threads loading 1024 elements (float4 = 4 floats per thread)
+    // Vectorized load helper indices (256 threads loading 1024 elements = float4 per thread)
     int a_load_row = threadIdx.x / 2;
     int a_load_col = (threadIdx.x % 2) * 4;
 
     int b_load_row = threadIdx.x / 32;
     int b_load_col = (threadIdx.x % 32) * 4;
 
-    for (int bk = 0; bk < K; bk += BK) {
-        // Load s_A via float4 vectorized 128-bit memory instructions
+    // Helper lambda for loading 1 float4 tile into shared memory buffer
+    auto load_tile = [&](int buffer_idx, int bk) {
+        // Load s_A
         if (cRow + a_load_row < M && bk + a_load_col + 3 < K) {
             float4 a_val = __ldg(reinterpret_cast<const float4*>(&A[(cRow + a_load_row) * K + (bk + a_load_col)]));
-            s_A[a_load_row][a_load_col + 0] = a_val.x;
-            s_A[a_load_row][a_load_col + 1] = a_val.y;
-            s_A[a_load_row][a_load_col + 2] = a_val.z;
-            s_A[a_load_row][a_load_col + 3] = a_val.w;
+            s_A[buffer_idx][a_load_row][a_load_col + 0] = a_val.x;
+            s_A[buffer_idx][a_load_row][a_load_col + 1] = a_val.y;
+            s_A[buffer_idx][a_load_row][a_load_col + 2] = a_val.z;
+            s_A[buffer_idx][a_load_row][a_load_col + 3] = a_val.w;
         } else {
             #pragma unroll
             for (int i = 0; i < 4; ++i) {
                 if (cRow + a_load_row < M && bk + a_load_col + i < K) {
-                    s_A[a_load_row][a_load_col + i] = A[(cRow + a_load_row) * K + (bk + a_load_col + i)];
+                    s_A[buffer_idx][a_load_row][a_load_col + i] = A[(cRow + a_load_row) * K + (bk + a_load_col + i)];
                 } else {
-                    s_A[a_load_row][a_load_col + i] = 0.0f;
+                    s_A[buffer_idx][a_load_row][a_load_col + i] = 0.0f;
                 }
             }
         }
 
-        // Load s_B via float4 vectorized 128-bit memory instructions
+        // Load s_B
         if (bk + b_load_row < K && cCol + b_load_col + 3 < N) {
             float4 b_val = __ldg(reinterpret_cast<const float4*>(&B[(bk + b_load_row) * N + (cCol + b_load_col)]));
-            s_B[b_load_row][b_load_col + 0] = b_val.x;
-            s_B[b_load_row][b_load_col + 1] = b_val.y;
-            s_B[b_load_row][b_load_col + 2] = b_val.z;
-            s_B[b_load_row][b_load_col + 3] = b_val.w;
+            s_B[buffer_idx][b_load_row][b_load_col + 0] = b_val.x;
+            s_B[buffer_idx][b_load_row][b_load_col + 1] = b_val.y;
+            s_B[buffer_idx][b_load_row][b_load_col + 2] = b_val.z;
+            s_B[buffer_idx][b_load_row][b_load_col + 3] = b_val.w;
         } else {
             #pragma unroll
             for (int i = 0; i < 4; ++i) {
                 if (bk + b_load_row < K && cCol + b_load_col + i < N) {
-                    s_B[b_load_row][b_load_col + i] = B[(bk + b_load_row) * N + (cCol + b_load_col + i)];
+                    s_B[buffer_idx][b_load_row][b_load_col + i] = B[(bk + b_load_row) * N + (cCol + b_load_col + i)];
                 } else {
-                    s_B[b_load_row][b_load_col + i] = 0.0f;
+                    s_B[buffer_idx][b_load_row][b_load_col + i] = 0.0f;
+                }
+            }
+        }
+    };
+
+    // --- PROLOGUE: Load Tile 0 into Buffer 0 ---
+    load_tile(0, 0);
+    __syncthreads();
+
+    int num_tiles = (K + BK - 1) / BK;
+
+    // --- MAIN PIPELINED LOOP (Double Buffering) ---
+    for (int t = 0; t < num_tiles; ++t) {
+        int cur = t & 1;
+        int nxt = (t + 1) & 1;
+        int next_bk = (t + 1) * BK;
+
+        float4 a_prefetch = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        float4 b_prefetch = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+        // 1. Asynchronously prefetch next tile into local thread registers
+        if (t + 1 < num_tiles) {
+            if (cRow + a_load_row < M && next_bk + a_load_col + 3 < K) {
+                a_prefetch = __ldg(reinterpret_cast<const float4*>(&A[(cRow + a_load_row) * K + (next_bk + a_load_col)]));
+            } else {
+                #pragma unroll
+                for (int i = 0; i < 4; ++i) {
+                    if (cRow + a_load_row < M && next_bk + a_load_col + i < K) {
+                        float v = A[(cRow + a_load_row) * K + (next_bk + a_load_col + i)];
+                        if (i == 0) a_prefetch.x = v;
+                        else if (i == 1) a_prefetch.y = v;
+                        else if (i == 2) a_prefetch.z = v;
+                        else if (i == 3) a_prefetch.w = v;
+                    }
+                }
+            }
+
+            if (next_bk + b_load_row < K && cCol + b_load_col + 3 < N) {
+                b_prefetch = __ldg(reinterpret_cast<const float4*>(&B[(next_bk + b_load_row) * N + (cCol + b_load_col)]));
+            } else {
+                #pragma unroll
+                for (int i = 0; i < 4; ++i) {
+                    if (next_bk + b_load_row < K && cCol + b_load_col + i < N) {
+                        float v = B[(next_bk + b_load_row) * N + (cCol + b_load_col + i)];
+                        if (i == 0) b_prefetch.x = v;
+                        else if (i == 1) b_prefetch.y = v;
+                        else if (i == 2) b_prefetch.z = v;
+                        else if (i == 3) b_prefetch.w = v;
+                    }
                 }
             }
         }
 
-        __syncthreads();
-
-        // 8x8 register micro-tile compute
+        // 2. Compute FMA outer products on current buffer while prefetch is in flight
         #pragma unroll
         for (int k = 0; k < BK; ++k) {
             float r_a[TM];
@@ -158,11 +224,11 @@ __global__ void gemm_register_tiled_kernel(const float* __restrict__ A,
 
             #pragma unroll
             for (int i = 0; i < TM; ++i) {
-                r_a[i] = s_A[threadRow + i][k];
+                r_a[i] = s_A[cur][threadRowInBlock + i][k];
             }
             #pragma unroll
             for (int j = 0; j < TN; ++j) {
-                r_b[j] = s_B[k][threadCol + j];
+                r_b[j] = s_B[cur][k][threadColInBlock + j];
             }
 
             #pragma unroll
@@ -174,27 +240,93 @@ __global__ void gemm_register_tiled_kernel(const float* __restrict__ A,
             }
         }
 
-        __syncthreads();
+        // 3. Commit prefetched registers into next buffer
+        if (t + 1 < num_tiles) {
+            __syncthreads();
+
+            s_A[nxt][a_load_row][a_load_col + 0] = a_prefetch.x;
+            s_A[nxt][a_load_row][a_load_col + 1] = a_prefetch.y;
+            s_A[nxt][a_load_row][a_load_col + 2] = a_prefetch.z;
+            s_A[nxt][a_load_row][a_load_col + 3] = a_prefetch.w;
+
+            s_B[nxt][b_load_row][b_load_col + 0] = b_prefetch.x;
+            s_B[nxt][b_load_row][b_load_col + 1] = b_prefetch.y;
+            s_B[nxt][b_load_row][b_load_col + 2] = b_prefetch.z;
+            s_B[nxt][b_load_row][b_load_col + 3] = b_prefetch.w;
+
+            __syncthreads();
+        }
     }
 
+    // --- EPILOGUE: Vectorized 128-bit float4 Stores ---
     #pragma unroll
     for (int i = 0; i < TM; ++i) {
         #pragma unroll
-        for (int j = 0; j < TN; ++j) {
-            int g_row = cRow + threadRow + i;
-            int g_col = cCol + threadCol + j;
-            if (g_row < M && g_col < N) {
+        for (int j = 0; j < TN; j += 4) {
+            int g_row = cRow + threadRowInBlock + i;
+            int g_col = cCol + threadColInBlock + j;
+
+            if (g_row < M && g_col + 3 < N) {
+                float4 c_out;
                 if (beta == 0.0f) {
-                    C[g_row * N + g_col] = alpha * r_c[i][j];
+                    c_out.x = alpha * r_c[i][j + 0];
+                    c_out.y = alpha * r_c[i][j + 1];
+                    c_out.z = alpha * r_c[i][j + 2];
+                    c_out.w = alpha * r_c[i][j + 3];
                 } else {
-                    C[g_row * N + g_col] = alpha * r_c[i][j] + beta * C[g_row * N + g_col];
+                    float4 c_prev = *reinterpret_cast<const float4*>(&C[g_row * N + g_col]);
+                    c_out.x = alpha * r_c[i][j + 0] + beta * c_prev.x;
+                    c_out.y = alpha * r_c[i][j + 1] + beta * c_prev.y;
+                    c_out.z = alpha * r_c[i][j + 2] + beta * c_prev.z;
+                    c_out.w = alpha * r_c[i][j + 3] + beta * c_prev.w;
+                }
+                *reinterpret_cast<float4*>(&C[g_row * N + g_col]) = c_out;
+            } else {
+                for (int k = 0; k < 4; ++k) {
+                    if (g_row < M && g_col + k < N) {
+                        if (beta == 0.0f) {
+                            C[g_row * N + g_col + k] = alpha * r_c[i][j + k];
+                        } else {
+                            C[g_row * N + g_col + k] = alpha * r_c[i][j + k] + beta * C[g_row * N + g_col + k];
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-// 4. Transposed GEMMs
+// ============================================================================
+// 4. Split-K GEMM for Reduction-Heavy Shapes (K >> M, N)
+// ============================================================================
+__global__ void gemm_split_k_kernel(const float* __restrict__ A,
+                                   const float* __restrict__ B,
+                                   float* __restrict__ C,
+                                   int M, int N, int K,
+                                   int split_k,
+                                   float alpha, float beta) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int k_slice = blockIdx.z;
+
+    int k_per_slice = (K + split_k - 1) / split_k;
+    int k_start = k_slice * k_per_slice;
+    int k_end = min(k_start + k_per_slice, K);
+
+    if (row < M && col < N) {
+        float sum = 0.0f;
+        for (int k = k_start; k < k_end; ++k) {
+            sum += A[row * K + k] * B[k * N + col];
+        }
+
+        atomicAdd(&C[row * N + col], alpha * sum);
+    }
+}
+
+// ============================================================================
+// 5. Transposed GEMMs (Backpropagation)
+// ============================================================================
+
 // C = A * B^T (A: M x K, B: N x K, C: M x N)
 __global__ void gemm_NT_kernel(const float* __restrict__ A,
                                const float* __restrict__ B,
@@ -295,7 +427,9 @@ __global__ void gemm_TN_kernel(const float* __restrict__ A,
     }
 }
 
-// Host Launcher Implementations
+// ============================================================================
+// Host Launchers & Shape-Aware Autotuning Dispatcher
+// ============================================================================
 void gemm_naive(const float* A, const float* B, float* C, int M, int N, int K,
                 float alpha, float beta, cudaStream_t stream) {
     dim3 block(16, 16);
@@ -310,11 +444,28 @@ void gemm_tiled(const float* A, const float* B, float* C, int M, int N, int K,
     gemm_tiled_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K, alpha, beta);
 }
 
+void gemm_split_k(const float* A, const float* B, float* C, int M, int N, int K,
+                  int split_k, float alpha, float beta, cudaStream_t stream) {
+    if (beta == 0.0f) {
+        CUDA_CHECK(cudaMemsetAsync(C, 0, M * N * sizeof(float), stream));
+    }
+    dim3 block(16, 16);
+    dim3 grid((N + 15) / 16, (M + 15) / 16, split_k);
+    gemm_split_k_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K, split_k, alpha, beta);
+}
+
 void gemm_register_tiled(const float* A, const float* B, float* C, int M, int N, int K,
                          float alpha, float beta, cudaStream_t stream) {
-    dim3 block((BM / TM) * (BN / TN)); // 256 threads per block
-    dim3 grid((N + BN - 1) / BN, (M + BM - 1) / BM);
-    gemm_register_tiled_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K, alpha, beta);
+    // Shape-Aware Dispatcher (Stage 6)
+    if (K >= 2048 && (M * N <= 256 * 256)) {
+        gemm_split_k(A, B, C, M, N, K, 8, alpha, beta, stream);
+    } else if (M < 64 || N < 64) {
+        gemm_tiled(A, B, C, M, N, K, alpha, beta, stream);
+    } else {
+        dim3 block((BM / TM) * (BN / TN)); // 256 threads arranged in warp hierarchy
+        dim3 grid((N + BN - 1) / BN, (M + BM - 1) / BM);
+        gemm_double_buffered_warp_tiled_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K, alpha, beta);
+    }
 }
 
 void gemm_NT(const float* A, const float* B, float* C, int M, int N, int K,
