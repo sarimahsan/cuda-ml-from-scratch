@@ -93,7 +93,7 @@ torch::Tensor linear_forward(torch::Tensor A, torch::Tensor B, torch::Tensor bia
     auto C = torch::empty({M, N}, A.options());
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
-    cuda_ml::kernels::gemm_tiled(A.data_ptr<float>(), B.data_ptr<float>(), C.data_ptr<float>(), M, N, K, 1.0f, 0.0f, stream);
+    cuda_ml::kernels::gemm_register_tiled(A.data_ptr<float>(), B.data_ptr<float>(), C.data_ptr<float>(), M, N, K, 1.0f, 0.0f, stream);
 
     if (bias.defined() && bias.numel() > 0) {
         cuda_ml::kernels::broadcast_bias_add(C.data_ptr<float>(), bias.data_ptr<float>(), C.data_ptr<float>(), M, N, stream);

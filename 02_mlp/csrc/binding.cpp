@@ -19,7 +19,7 @@ torch::Tensor linear_forward_cuda(torch::Tensor X, torch::Tensor W, torch::Tenso
     auto Z = torch::empty({M, N}, X.options());
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
-    cuda_ml::kernels::gemm_tiled(X.data_ptr<float>(), W.data_ptr<float>(), Z.data_ptr<float>(), M, N, K, 1.0f, 0.0f, stream);
+    cuda_ml::kernels::gemm_register_tiled(X.data_ptr<float>(), W.data_ptr<float>(), Z.data_ptr<float>(), M, N, K, 1.0f, 0.0f, stream);
     cuda_ml::kernels::broadcast_bias_add(Z.data_ptr<float>(), b.data_ptr<float>(), Z.data_ptr<float>(), M, N, stream);
     return Z;
 }
@@ -120,7 +120,7 @@ void adam_step_cuda(torch::Tensor param, torch::Tensor m, torch::Tensor v, torch
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("linear_forward", &linear_forward_cuda, "CUDA Tiled Linear Forward GEMM (Z = X * W + b)");
+    m.def("linear_forward", &linear_forward_cuda, "CUDA Register-Tiled Linear Forward GEMM (Z = X * W + b)");
     m.def("linear_backward", &linear_backward_cuda, "CUDA Linear Backward Gradients (dW, db, dX)");
     m.def("relu_forward", &relu_forward_cuda, "CUDA ReLU Forward");
     m.def("relu_backward", &relu_backward_cuda, "CUDA ReLU Backward");
