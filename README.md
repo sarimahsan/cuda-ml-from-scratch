@@ -7,7 +7,7 @@
 | ⚙️ [**CUDA Kernel Engine**](kernels/README.md) | 📊 [**01. Logistic Regression**](01_logistic_regression/README.md) | 🧠 [**02. MLP**](02_mlp/README.md) | 🔄 [**03. RNN**](03_rnn/README.md) | ⚡ [**04. LSTM**](04_lstm/README.md) |
 | :---: | :---: | :---: | :---: | :---: |
 | 8 Core Primitives • Fused Ops | Binary Hypothesis • Warp BCE | 2D Tiled GEMMs • Adam/SGD | Elman Recurrence • BPTT | Modular & Fused Gating • BPTT |
-| GEMM, Conv, Softmax, Norms | Titanic Survival ($N=891$) | MNIST Digits ($>98\%$) | Char LM Sequence ($T=64$) | Shakespeare SeqLM ($241\text{k tok/s}$) |
+| GEMM, Conv, Softmax, Norms | Titanic Survival ($N=891$) | MNIST Digits ($>98\%$) | Char LM Sequence ($T=64$) | Shakespeare SeqLM ($1.08\text{M tok/s}$) |
 
 ---
 
@@ -40,9 +40,9 @@ The [`kernels/`](kernels/) directory provides standalone, hardware-saturating GP
 | Architecture | Dataset / Configuration | Custom CUDA Performance | PyTorch Baseline | Numerical Parity | Documentation Tab |
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | **01. Logistic Regression** | Titanic Survival ($N=891$) | **$3.1\text{ ms / epoch}$** | $4.2\text{ ms / epoch}$ | ✅ Exact ($\Delta < 10^{-7}$) | [📖 View README](01_logistic_regression/README.md) |
-| **02. MLP** | MNIST Classification ($784 \to 256 \to 10$) | **$52{,}000\text{ img/s}$** | $61{,}000\text{ img/s}$ | ✅ Exact ($\Delta < 10^{-6}$) | [📖 View README](02_mlp/README.md) |
-| **03. RNN** | Sequence Language Model ($T=64, N=64, H=256$) | **$180{,}000\text{ tok/s}$** | $220{,}000\text{ tok/s}$ | ✅ Exact ($\Delta < 10^{-4}$) | [📖 View README](03_rnn/README.md) |
-| **04. LSTM** | Shakespeare LM ($T=64, N=64, H=256$) | **$241{,}136\text{ tok/s}$** | $973{,}352\text{ tok/s}$ | ✅ Exact ($\Delta < 1.38 \times 10^{-5}$) | [📖 View README](04_lstm/README.md) |
+| **02. MLP** | MNIST End-to-End Training ($5\text{ Epochs}, B=128$) | **$1.22\text{ s} \ (\mathbf{3.14\times})$** | $3.84\text{ s}$ | ✅ Exact ($\Delta < 10^{-6}$) | [📖 View README](02_mlp/README.md) |
+| **03. RNN** | Sequence Language Model ($T=128, N=128, H=512$) | **$1{,}264{,}576\text{ tok/s}$** | $1{,}188{,}584\text{ tok/s}$ | ✅ Exact ($\Delta < 1.53 \times 10^{-5}$) | [📖 View README](03_rnn/README.md) |
+| **04. LSTM** | Shakespeare LM ($T=64, N=64, H=256$) | **$1{,}082{,}754\text{ tok/s}$** | $977{,}868\text{ tok/s}$ | ✅ Exact ($\Delta < 1.26 \times 10^{-5}$) | [📖 View README](04_lstm/README.md) |
 
 ---
 
@@ -59,13 +59,13 @@ Click to expand the technical summary, CUDA kernel highlights, and quickstart co
 - **100% Modular Gate Files**: Dedicated separate `.cuh`, `src/*.cu`, and `csrc/*.cu` for all 5 gate components (`input_gate.cu`, `forget_gate.cu`, `cell_candidate_gate.cu`, `output_gate.cu`, `cell_state.cu`).
 - **High-Throughput Fused 4-Gate Kernel**: Register-resident execution (`fused_gates.cu`) cutting global memory traffic by over $56\%$.
 - **2D Tiled GEMM Projections**: Shared-memory matrix multiplications ($Z = X W^T$, $dW = X^T dZ$, $dX = dZ W$, $db = \sum dZ$).
-- **Exact Backpropagation Through Time (BPTT)**: Analytical Jacobian products matching PyTorch autograd ($\Delta < 1.38 \times 10^{-5}$).
+- **Exact Backpropagation Through Time (BPTT)**: Analytical Jacobian products matching PyTorch autograd ($\Delta < 1.26 \times 10^{-5}$).
 - **In-Place GPU Gradient Clipping**: Vectorized L2 norm clipping and Adam optimizer in CUDA.
 
 #### Sequence Throughput Benchmark ($T=64, N=64, D=128, H=256$)
-- **Custom CUDA (Modular Gates)**: $10.76\text{ ms}$ fwd / $16.15\text{ ms}$ bwd $\to 152{,}181\text{ tokens/sec}$
-- **Custom CUDA (Fused Gates)**: $4.33\text{ ms}$ fwd / $12.65\text{ ms}$ bwd $\to \mathbf{241{,}136\text{ tokens/sec}}$
-- **PyTorch `nn.LSTM` (cuDNN)**: $1.81\text{ ms}$ fwd / $2.40\text{ ms}$ bwd $\to 973{,}352\text{ tokens/sec}$
+- **Custom CUDA (Modular Gates)**: $15.56\text{ ms}$ fwd / $39.41\text{ ms}$ bwd $\to 74{,}513\text{ tokens/sec}$
+- **PyTorch `nn.LSTM` (cuDNN Native)**: $1.83\text{ ms}$ fwd / $2.36\text{ ms}$ bwd $\to 977{,}868\text{ tokens/sec}$
+- **Custom CUDA (Fused Gates Engine)**: **$1.34\text{ ms}$** fwd / **$2.44\text{ ms}$** bwd $\to \mathbf{1{,}082{,}754\text{ tokens/sec}}$ (**$1.11\times$ faster than cuDNN** 🚀)
 
 #### Quickstart
 ```bash
@@ -78,19 +78,28 @@ python 04_lstm/benchmark.py
 </details>
 
 <details>
-<summary><h3>👁️ Tab 03: Convolutional Neural Network (CNN)</h3></summary>
+<summary><h3>🔄 Tab 03: Basic Elman Recurrent Neural Network (RNN)</h3></summary>
 
-> **Directory**: [`03_cnn/`](03_cnn/) &nbsp;|&nbsp; **Full Documentation**: [`03_cnn/README.md`](03_cnn/README.md)
+> **Directory**: [`03_rnn/`](03_rnn/) &nbsp;|&nbsp; **Full Documentation**: [`03_rnn/README.md`](03_rnn/README.md)
 
 #### Architecture & Highlights
-- **2D Spatial Convolution Forward & Backward**: Direct 2D grid/block spatial mapping for filters, inputs, and gradients ($Z = \mathrm{Conv2D}(X, W) + b$, $\nabla W$, $\nabla X$, $\nabla b$).
-- **2D Max Pooling with Argmax Mask Routing**: Forward pass records spatial winner indices in bitmasks; backward pass routes subgradients directly to the exact maximum location with zero floating-point search.
-- **Fully Connected Tiled GEMM Classifier**: Shared-memory matrix multiplication connecting flattened feature maps to categorical logits.
-- **MNIST Digits**: Achieves **$>98.6\%$ test accuracy**.
+- **Precomputed Input Projections**: Flattens entire sequence $[T \cdot N, D]$ into a single call to the centralized `gemm_register_tiled` engine, eliminating $T-1$ separate kernel launches.
+- **Fused In-Register Recurrence Kernel**: Merges bias additions and $\tanh(z)$ / $\operatorname{ReLU}(z)$ in registers per timestep.
+- **Hardware-Accelerated BPTT**: Analytical backward gradients with batched parameter reductions via `gemm_TN` and `gemm_NT`.
+- **High-Throughput Scaling**: Outperforms PyTorch native on larger hidden dimensions ($H=512$) with up to **$1{,}264{,}576\text{ tokens/sec}$** ($1.12\times$ speedup).
+
+#### Sequence Throughput Benchmark (Tesla T4)
+- **$T=128, N=64, H=512$**: $7.81\text{ ms}$ (Custom) vs $8.67\text{ ms}$ (PyTorch) $\to \mathbf{1.11\times\text{ Faster}}$
+- **$T=128, N=128, H=512$**: $12.96\text{ ms}$ (Custom) vs $13.78\text{ ms}$ (PyTorch) $\to \mathbf{1.06\times\text{ Faster}}$
+- **$T=256, N=64, H=512$**: $15.95\text{ ms}$ (Custom) vs $17.91\text{ ms}$ (PyTorch) $\to \mathbf{1.12\times\text{ Faster}}$
 
 #### Quickstart
 ```bash
-python 03_cnn/train_mnist.py
+# Parity & Throughput Benchmarks
+python 03_rnn/benchmark.py
+
+# Character Language Model Demo
+python 03_rnn/train_char_lm.py --epochs 10 --seq_len 32 --batch_size 16
 ```
 </details>
 
@@ -145,8 +154,8 @@ python 01_logistic_regression/benchmark.py
 # 3. Benchmark 02_mlp vs PyTorch:
 python 02_mlp/benchmark.py
 
-# 4. Benchmark 03_cnn vs PyTorch:
-python 03_cnn/benchmark.py
+# 4. Benchmark 03_rnn vs PyTorch:
+python 03_rnn/benchmark.py
 
 # 5. Benchmark 04_lstm vs PyTorch:
 python 04_lstm/benchmark.py

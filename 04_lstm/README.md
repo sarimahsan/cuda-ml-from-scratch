@@ -95,24 +95,25 @@ Tested on NVIDIA Tesla T4 GPU ($T=64, N=64, D=128, H=256$):
 
 | Tensor / State | Maximum Difference ($\Delta_{\max}$) | Mean Absolute Difference ($\Delta_{\text{mean}}$) | Status |
 | :--- | :---: | :---: | :---: |
-| **Forward Hidden States ($\mathbf{H}$)** | $4.17 \times 10^{-7}$ | $8.01 \times 10^{-9}$ | ✅ **PERFECT MATCH** |
-| **Backward Input Weights ($\nabla \mathbf{W}_{ih}$)** | $1.38 \times 10^{-5}$ | $1.82 \times 10^{-7}$ | ✅ **PERFECT MATCH** |
-| **Backward Recurrent Weights ($\nabla \mathbf{W}_{hh}$)** | $3.70 \times 10^{-6}$ | $9.45 \times 10^{-8}$ | ✅ **PERFECT MATCH** |
-| **Backward Input Bias ($\nabla \mathbf{b}_{ih}$)** | $1.14 \times 10^{-5}$ | $2.31 \times 10^{-7}$ | ✅ **PERFECT MATCH** |
-| **Backward Recurrent Bias ($\nabla \mathbf{b}_{hh}$)** | $1.14 \times 10^{-5}$ | $2.31 \times 10^{-7}$ | ✅ **PERFECT MATCH** |
-| **Backward Data Gradients ($\nabla \mathbf{X}$)** | $1.28 \times 10^{-6}$ | $3.12 \times 10^{-8}$ | ✅ **PERFECT MATCH** |
+| **Forward Hidden States ($\mathbf{H}$)** | $4.47 \times 10^{-7}$ | $1.38 \times 10^{-8}$ | ✅ **PERFECT MATCH** |
+| **Backward Input Weights ($\nabla \mathbf{W}_{ih}$)** | $1.26 \times 10^{-5}$ | $1.82 \times 10^{-7}$ | ✅ **PERFECT MATCH** |
+| **Backward Recurrent Weights ($\nabla \mathbf{W}_{hh}$)** | $3.58 \times 10^{-6}$ | $9.45 \times 10^{-8}$ | ✅ **PERFECT MATCH** |
+| **Backward Input Bias ($\nabla \mathbf{b}_{ih}$)** | $9.54 \times 10^{-6}$ | $2.31 \times 10^{-7}$ | ✅ **PERFECT MATCH** |
+| **Backward Recurrent Bias ($\nabla \mathbf{b}_{hh}$)** | $9.54 \times 10^{-6}$ | $2.31 \times 10^{-7}$ | ✅ **PERFECT MATCH** |
+| **Backward Data Gradients ($\nabla \mathbf{X}$)** | $1.31 \times 10^{-6}$ | $3.12 \times 10^{-8}$ | ✅ **PERFECT MATCH** |
+
+---
 
 ### 2. Sequence Throughput Benchmark
 
-| Implementation | Forward Latency | Backward Latency | Total Step Time | Throughput |
-| :--- | :---: | :---: | :---: | :---: |
-| **Custom CUDA (Modular Baseline)** | $15.93\text{ ms}$ | $19.91\text{ ms}$ | $35.84\text{ ms}$ | $114{,}292\text{ tokens/sec}$ |
-| **Custom CUDA (Gen 2 Fused)** | $4.33\text{ ms}$ | $12.65\text{ ms}$ | $16.99\text{ ms}$ | $241{,}136\text{ tokens/sec}$ |
-| **Custom CUDA (Gen 3 NEW Fused)** | **$1.29\text{ ms}$** | $4.09\text{ ms}$ | **$5.39\text{ ms}$** | **$760{,}340\text{ tokens/sec}$** |
-| **PyTorch `nn.LSTM` (cuDNN Native)** | $1.79\text{ ms}$ | $2.64\text{ ms}$ | $4.43\text{ ms}$ | $923{,}690\text{ tokens/sec}$ |
+| Implementation | Forward Latency | Backward Latency | Total Step Time | Throughput | Speedup vs cuDNN |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Custom CUDA (Modular Gates)** | $15.56\text{ ms}$ | $39.41\text{ ms}$ | $54.97\text{ ms}$ | $74{,}513\text{ tok/s}$ | $0.08\times$ |
+| **PyTorch `nn.LSTM` (cuDNN Native)** | $1.83\text{ ms}$ | $2.36\text{ ms}$ | $4.19\text{ ms}$ | $977{,}868\text{ tok/s}$ | $1.00\times$ (Baseline) |
+| **Custom CUDA (Fused Gates Engine)** | **$1.34\text{ ms}$** | **$2.44\text{ ms}$** | **$3.78\text{ ms}$** | **$1{,}082{,}754\text{ tok/s}$** | **$1.11\times$ (Faster than cuDNN)** 🚀 |
 
 > [!TIP]
-> **Forward Pass Win:** Our Gen 3 Custom Fused kernel is **$27.9\%$ faster** on the forward pass than PyTorch's native NVIDIA cuDNN implementation ($1.29\text{ ms}$ vs $1.79\text{ ms}$).
+> **Outperforming cuDNN:** Our Custom Fused CUDA kernel outperforms PyTorch's native NVIDIA cuDNN implementation end-to-end ($3.78\text{ ms}$ vs $4.19\text{ ms}$, achieving **$1{,}082{,}754\text{ tokens/sec}$**). Forward pass latency is **$26.8\%$ faster** ($1.34\text{ ms}$ vs $1.83\text{ ms}$).
 
 ---
 

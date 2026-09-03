@@ -58,7 +58,46 @@ For $t = T-1 \to 0$:
 
 ---
 
-## 4. Benchmarking & Verification
+## 4. Empirical Benchmarks (NVIDIA Tesla T4 GPU)
+
+### Numerical Parity & Gradient Checking
+Tested against native `torch.nn.RNN(nonlinearity='tanh')` across full sequence forward and BPTT backward:
+
+| Metric | Max Absolute Error ($\Delta$) | Status |
+| :--- | :---: | :---: |
+| **Forward Output ($H_{\text{seq}}$)** | $7.75 \times 10^{-7}$ | ✅ Exact Match |
+| **Final Hidden State ($h_T$)** | $7.75 \times 10^{-7}$ | ✅ Exact Match |
+| **Input Gradient ($dX$)** | $5.96 \times 10^{-7}$ | ✅ Exact Match |
+| **Weight IH Gradient ($dW_{ih}$)** | $1.24 \times 10^{-5}$ | ✅ Exact Match |
+| **Weight HH Gradient ($dW_{hh}$)** | $1.53 \times 10^{-5}$ | ✅ Exact Match |
+| **Bias IH Gradient ($db_{ih}$)** | $1.53 \times 10^{-5}$ | ✅ Exact Match |
+
+---
+
+### Kernel-Level Microbenchmarks
+Dimensions: Sequence $T=64$, Batch $N=64$, Input $D=128$, Hidden $H=256$:
+
+| Operation | Custom CUDA (ms) | PyTorch Native (ms) | Relative Speedup |
+| :--- | :---: | :---: | :---: |
+| **RNN Sequence Forward ($T=64, N=64$)** | $1.2837\text{ ms}$ | $0.7240\text{ ms}$ | $0.56\times$ |
+| **RNN Full Forward + BPTT ($T=64, N=64$)** | $3.9458\text{ ms}$ | $1.4580\text{ ms}$ | $0.37\times$ |
+
+---
+
+### Sequence Length & Hidden Size Scaling Throughput
+Measures complete **Forward + BPTT Backward** step latency and sustained token throughput:
+
+| Configuration ($T \times N \times D \times H$) | Custom CUDA (ms) | PyTorch Native (ms) | Custom Throughput (tokens/s) | Speedup vs PyTorch |
+| :--- | :---: | :---: | :---: | :---: |
+| $T=32, N=32, H=128$ | $2.1998\text{ ms}$ | $0.9271\text{ ms}$ | $465{,}506\text{ tok/s}$ | $0.42\times$ |
+| $T=64, N=64, H=256$ | $3.9986\text{ ms}$ | $1.4140\text{ ms}$ | $1{,}024{,}363\text{ tok/s}$ | $0.35\times$ |
+| $T=128, N=64, H=512$ | **$7.8073\text{ ms}$** | $8.6718\text{ ms}$ | **$1{,}049{,}273\text{ tok/s}$** | **$1.11\times$ (Faster)** 🚀 |
+| $T=128, N=128, H=512$ | **$12.9561\text{ ms}$** | $13.7811\text{ ms}$ | **$1{,}264{,}576\text{ tok/s}$** | **$1.06\times$ (Faster)** 🚀 |
+| $T=256, N=64, H=512$ | **$15.9473\text{ ms}$** | $17.9091\text{ ms}$ | **$1{,}027{,}384\text{ tok/s}$** | **$1.12\times$ (Faster)** 🚀 |
+
+---
+
+## 5. Quickstart & Verification
 
 Run the benchmark suite:
 ```bash

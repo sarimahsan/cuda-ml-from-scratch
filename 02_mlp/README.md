@@ -182,26 +182,26 @@ python benchmark.py --quick --epochs 3
 
 | Metric | Custom CUDA MLP | PyTorch Native MLP | Advantage / Speedup |
 | :--- | :---: | :---: | :---: |
-| **Total Training Duration** | **$1.106\text{ s}$** | $3.471\text{ s}$ | **$3.14\times$ Faster** |
-| **Average Epoch Latency** | **$221.2\text{ ms}$** | $694.2\text{ ms}$ | **$3.14\times$ Faster** |
-| **Final Test Accuracy** | **$97.86\%$** | $97.48\%$ | **$+0.38\%$ Higher** |
-| **Peak VRAM Allocated** | $65.68\text{ MB}$ | $57.57\text{ MB}$ | Lightweight In-Place Footprint |
+| **Total Training Duration** | **$1.224\text{ s}$** | $3.840\text{ s}$ | **$3.14\times$ Faster** 🚀 |
+| **Average Epoch Latency** | **$244.9\text{ ms}$** | $767.9\text{ ms}$ | **$3.14\times$ Faster** 🚀 |
+| **Final Test Accuracy** | **$97.82\%$** | $97.48\%$ | **$+0.34\%$ Higher** |
+| **Peak VRAM Allocated** | $65.46\text{ MB}$ | $57.35\text{ MB}$ | In-Place Zero-Overhead Memory |
 
-$$\text{Speedup} = \frac{T_{\text{PyTorch}}}{T_{\text{CUDA}}} = \frac{3.471\text{ s}}{1.106\text{ s}} \approx 3.14\times$$
+$$\text{Speedup} = \frac{T_{\text{PyTorch}}}{T_{\text{CUDA}}} = \frac{3.840\text{ s}}{1.224\text{ s}} \approx 3.14\times$$
 
 ---
 
 #### 2. Kernel-Level Microbenchmark Latency Breakdown ($M = 512, K = 784, N = 256$)
 
-| Kernel Operation | Custom CUDA | PyTorch Native | Speedup | Dominant Advantage |
+| Kernel Operation | Custom CUDA (ms) | PyTorch Native (ms) | Speedup vs PyTorch | Dominant Optimization |
 | :--- | :---: | :---: | :---: | :--- |
-| **Optimizer: Adam In-Place Step** | **$0.0178\text{ ms}$** | $0.3168\text{ ms}$ | **$17.83\times$** | Fused single-pass parameter + momentum updates |
-| **Activation: $\mathrm{ReLU}$ Backward** | **$0.0339\text{ ms}$** | $0.2511\text{ ms}$ | **$7.42\times$** | Zero autograd tape & dispatch overhead |
-| **Activation: $\mathrm{ReLU}$ Forward** | **$0.0236\text{ ms}$** | $0.0345\text{ ms}$ | **$1.46\times$** | Direct coalesced elementwise kernel |
-| **Activation: $\mathrm{GELU}$ Forward** | **$0.0202\text{ ms}$** | $0.0205\text{ ms}$ | **$1.02\times$** | Fast math approximation $\Phi(x)$ |
-| **Linear Forward GEMM ($Z = XW+b$)** | $0.4773\text{ ms}$ | $0.1291\text{ ms}$ | $0.27\times$ | $16\times 16$ Shared-memory tiling vs. cuBLAS |
-| **Linear Backward GEMM ($dW, db, dX$)** | $1.3460\text{ ms}$ | $0.3837\text{ ms}$ | $0.29\times$ | FP32 CUDA cores vs. cuBLAS Tensor Cores |
-| **Fused $\mathrm{Softmax}$ + CE Loss** | $1.1018\text{ ms}$ | $0.4089\text{ ms}$ | $0.37\times$ | Fused analytical gradient $dZ = \frac{P - Y}{N}$ |
+| **Optimizer: Adam In-Place Step** | **$0.0185\text{ ms}$** | $0.2687\text{ ms}$ | **$14.51\times$** | Fused single-pass parameter + momentum updates |
+| **Fused $\mathrm{Softmax}$ + CE Loss & Grads** | **$0.0351\text{ ms}$** | $0.3954\text{ ms}$ | **$11.25\times$** | Fused online warp-reduction & analytical gradient |
+| **Activation: $\mathrm{ReLU}$ Backward** | **$0.0238\text{ ms}$** | $0.2333\text{ ms}$ | **$9.81\times$** | Zero autograd tape & dispatch overhead |
+| **Activation: $\mathrm{ReLU}$ Forward** | **$0.0195\text{ ms}$** | $0.0226\text{ ms}$ | **$1.16\times$** | Direct coalesced elementwise kernel |
+| **Activation: $\mathrm{GELU}$ Forward** | **$0.0210\text{ ms}$** | $0.0224\text{ ms}$ | **$1.07\times$** | Fast math approximation $\Phi(x)$ |
+| **Linear Backward GEMM ($dW, db, dX$)** | **$0.4360\text{ ms}$** | $0.3899\text{ ms}$ | **$0.89\times$** | Double-buffered $128\times 128$ warp-tiled kernel |
+| **Linear Forward GEMM ($Z = XW+b$)** | $0.3438\text{ ms}$ | $0.0921\text{ ms}$ | $0.27\times$ | FP32 CUDA cores vs cuBLAS Tensor Cores |
 
 $$\text{Adam Parameter Update: } \theta_{t+1} = \theta_t - \frac{\eta}{\sqrt{\hat{v}_t} + \epsilon}\hat{m}_t$$
 
@@ -216,26 +216,26 @@ $$\text{Throughput} = \frac{B}{T_{\text{batch}}} \quad \left[\frac{\text{samples
 ##### Model A: Small MLP ($784 \to 128 \to 10$)
 | Batch Size ($B$) | Custom CUDA ($ms$) | PyTorch Native ($ms$) | CUDA Throughput | Speedup |
 | :---: | :---: | :---: | :---: | :---: |
-| **$64$** | **$0.2019\text{ ms}$** | $1.2004\text{ ms}$ | **$317{,}017\text{ img/s}$** | **$5.95\times$** |
-| **$128$** | **$0.2995\text{ ms}$** | $1.1766\text{ ms}$ | **$427{,}400\text{ img/s}$** | **$3.93\times$** |
-| **$512$** | **$0.8446\text{ ms}$** | $1.2533\text{ ms}$ | **$606{,}220\text{ img/s}$** | **$1.48\times$** |
-| **$2048$** | $2.2753\text{ ms}$ | $1.2089\text{ ms}$ | $900{,}111\text{ img/s}$ | $0.53\times$ |
+| **$64$** | **$0.6952\text{ ms}$** | $1.1485\text{ ms}$ | **$92{,}057\text{ img/s}$** | **$1.65\times$** |
+| **$128$** | **$0.7872\text{ ms}$** | $1.1512\text{ ms}$ | **$162{,}607\text{ img/s}$** | **$1.46\times$** |
+| **$512$** | $1.3015\text{ ms}$ | $1.2186\text{ ms}$ | $393{,}401\text{ img/s}$ | $0.94\times$ |
+| **$2048$** | $2.0859\text{ ms}$ | $1.2064\text{ ms}$ | $981{,}808\text{ img/s}$ | $0.58\times$ |
 
 ##### Model B: Standard MNIST MLP ($784 \to 256 \to 128 \to 10$)
 | Batch Size ($B$) | Custom CUDA ($ms$) | PyTorch Native ($ms$) | CUDA Throughput | Speedup |
 | :---: | :---: | :---: | :---: | :---: |
-| **$64$** | **$0.2502\text{ ms}$** | $1.7201\text{ ms}$ | **$255{,}761\text{ img/s}$** | **$6.87\times$** |
-| **$128$** | **$0.3815\text{ ms}$** | $1.4047\text{ ms}$ | **$335{,}479\text{ img/s}$** | **$3.68\times$** |
-| **$512$** | **$0.9153\text{ ms}$** | $1.4892\text{ ms}$ | **$559{,}379\text{ img/s}$** | **$1.63\times$** |
-| **$2048$** | $3.1237\text{ ms}$ | $1.4065\text{ ms}$ | $655{,}626\text{ img/s}$ | $0.45\times$ |
+| **$64$** | **$0.6098\text{ ms}$** | $1.3667\text{ ms}$ | **$104{,}947\text{ img/s}$** | **$2.24\times$** 🚀 |
+| **$128$** | **$0.4378\text{ ms}$** | $1.4003\text{ ms}$ | **$292{,}364\text{ img/s}$** | **$3.20\times$** 🚀 |
+| **$512$** | **$0.7187\text{ ms}$** | $1.4055\text{ ms}$ | **$712{,}397\text{ img/s}$** | **$1.96\times$** 🚀 |
+| **$2048$** | $1.9649\text{ ms}$ | $1.3809\text{ ms}$ | **$1{,}042{,}316\text{ img/s}$** | $0.70\times$ |
 
 ##### Model C: Deep/Wide MLP ($1024 \to 1024 \to 512 \to 256 \to 10$)
 | Batch Size ($B$) | Custom CUDA ($ms$) | PyTorch Native ($ms$) | CUDA Throughput | Speedup |
 | :---: | :---: | :---: | :---: | :---: |
-| **$64$** | **$1.0569\text{ ms}$** | $1.6978\text{ ms}$ | **$60{,}551\text{ img/s}$** | **$1.61\times$** |
-| **$128$** | $1.7553\text{ ms}$ | $1.6673\text{ ms}$ | $72{,}920\text{ img/s}$ | $0.95\times$ |
-| **$512$** | $6.3729\text{ ms}$ | $1.8042\text{ ms}$ | $80{,}340\text{ img/s}$ | $0.28\times$ |
-| **$2048$** | $26.3367\text{ ms}$ | $5.0335\text{ ms}$ | $77{,}762\text{ img/s}$ | $0.19\times$ |
+| **$64$** | **$0.8194\text{ ms}$** | $1.6029\text{ ms}$ | **$78{,}107\text{ img/s}$** | **$1.96\times$** |
+| **$128$** | **$0.9653\text{ ms}$** | $1.5779\text{ ms}$ | **$132{,}602\text{ img/s}$** | **$1.63\times$** |
+| **$512$** | $1.8900\text{ ms}$ | $1.8060\text{ ms}$ | $270{,}897\text{ img/s}$ | $0.96\times$ |
+| **$2048$** | $6.5517\text{ ms}$ | $4.6810\text{ ms}$ | $312{,}590\text{ img/s}$ | $0.71\times$ |
 
 ---
 
