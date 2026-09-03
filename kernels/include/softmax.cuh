@@ -28,7 +28,7 @@ void softmax_backward(const float* dProbs, const float* probs, float* dLogits,
 // 5. Fused Softmax + Cross-Entropy Loss, Probabilities & Analytical Gradient
 // Computes loss = -log(probs[target]), probs = softmax(logits), and dLogits = (probs - 1_{target}) / N
 void fused_softmax_cross_entropy_forward_backward(const float* logits, const int64_t* targets,
-                                                  float* loss, float* dLogits, float* probs = nullptr,
+                                                  float* loss, float* dLogits, float* probs,
                                                   int N, int C, cudaStream_t stream = 0);
 
 } // namespace kernels
