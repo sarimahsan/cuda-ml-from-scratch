@@ -1,4 +1,6 @@
 #include <torch/extension.h>
+#include <c10/cuda/CUDAStream.h>
+#include <ATen/cuda/CUDAContext.h>
 #include <vector>
 #include "../../kernels/include/gemm.cuh"
 #include "../../kernels/include/activation.cuh"
@@ -75,7 +77,7 @@ torch::Tensor gelu_backward_cuda(torch::Tensor dA, torch::Tensor Z) {
 
 torch::Tensor sigmoid_forward_cuda(torch::Tensor Z) {
     auto A = torch::empty_like(Z);
-    cuda_ml::kernels::sigmoid_forward(Z.data_ptr<float>(), A.data_ptr<float>(), Z.numel(), at::cuda::getCurrentCUDAStream());
+    cuda_ml::kernels::sigmoid_forward(Z.data_ptr<float>(), A.da-ta_ptr<float>(), Z.numel(), at::cuda::getCurrentCUDAStream());
     return A;
 }
 
