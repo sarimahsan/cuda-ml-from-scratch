@@ -103,25 +103,31 @@ __global__ void gemm_register_tiled_kernel(const float* __restrict__ A,
 
     float r_c[TM][TN] = {0.0f};
 
-    // Load helpers
-    int a_load_row = threadIdx.x / BK;
-    int a_load_col = threadIdx.x % BK;
-    int b_load_row = threadIdx.x / BN;
-    int b_load_col = threadIdx.x % BN;
-
     for (int bk = 0; bk < K; bk += BK) {
-        // Load s_A
-        if (cRow + a_load_row < M && bk + a_load_col < K) {
-            s_A[a_load_row][a_load_col] = A[(cRow + a_load_row) * K + (bk + a_load_col)];
-        } else {
-            s_A[a_load_row][a_load_col] = 0.0f;
+        // Load s_A (BM x BK = 64 * 8 = 512 elements across 256 threads -> 2 elements per thread)
+        #pragma unroll
+        for (int offset = 0; offset < (BM * BK); offset += ((BM / TM) * (BN / TN))) {
+            int idx = threadIdx.x + offset;
+            int r = idx / BK;
+            int c = idx % BK;
+            if (cRow + r < M && bk + c < K) {
+                s_A[r][c] = A[(cRow + r) * K + (bk + c)];
+            } else {
+                s_A[r][c] = 0.0f;
+            }
         }
 
-        // Load s_B
-        if (bk + b_load_row < K && cCol + b_load_col < N) {
-            s_B[b_load_row][b_load_col] = B[(bk + b_load_row) * N + (cCol + b_load_col)];
-        } else {
-            s_B[b_load_row][b_load_col] = 0.0f;
+        // Load s_B (BK x BN = 8 * 64 = 512 elements across 256 threads -> 2 elements per thread)
+        #pragma unroll
+        for (int offset = 0; offset < (BK * BN); offset += ((BM / TM) * (BN / TN))) {
+            int idx = threadIdx.x + offset;
+            int r = idx / BN;
+            int c = idx % BN;
+            if (bk + r < K && cCol + c < N) {
+                s_B[r][c] = B[(bk + r) * N + (cCol + c)];
+            } else {
+                s_B[r][c] = 0.0f;
+            }
         }
 
         __syncthreads();
