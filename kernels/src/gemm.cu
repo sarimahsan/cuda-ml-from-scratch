@@ -27,8 +27,8 @@ __global__ void gemm_naive_kernel(const float* __restrict__ A,
     }
 }
 
-// 2. 2D Shared Memory Tiled GEMM with bank conflict padding (TILE_DIM = 16 or 32)
-#define TILE_DIM 16
+// 2. 2D Shared Memory Tiled GEMM with bank conflict padding (TILE_DIM = 32)
+#define TILE_DIM 32
 
 __global__ void gemm_tiled_kernel(const float* __restrict__ A,
                                   const float* __restrict__ B,
@@ -80,12 +80,12 @@ __global__ void gemm_tiled_kernel(const float* __restrict__ A,
     }
 }
 
-// 3. Register Tiled GEMM: Each thread computes a 4x4 submatrix tile
-#define BM 64
-#define BN 64
+// 3. Register Tiled GEMM: BM=128, BN=128, BK=8, TM=8, TN=8 with 128-bit Vectorization
+#define BM 128
+#define BN 128
 #define BK 8
-#define TM 4
-#define TN 4
+#define TM 8
+#define TN 8
 
 __global__ void gemm_register_tiled_kernel(const float* __restrict__ A,
                                            const float* __restrict__ B,
@@ -98,40 +98,59 @@ __global__ void gemm_register_tiled_kernel(const float* __restrict__ A,
     int cRow = blockIdx.y * BM;
     int cCol = blockIdx.x * BN;
 
-    int threadRow = (threadIdx.x / (BN / TN)) * TM;
-    int threadCol = (threadIdx.x % (BN / TN)) * TN;
+    // 256 threads arranged as 16x16 grid, each computing 8x8 output elements
+    int threadRow = (threadIdx.x / 16) * TM;
+    int threadCol = (threadIdx.x % 16) * TN;
 
     float r_c[TM][TN] = {0.0f};
 
+    // Vectorized load indices for 256 threads loading 1024 elements (float4 = 4 floats per thread)
+    int a_load_row = threadIdx.x / 2;
+    int a_load_col = (threadIdx.x % 2) * 4;
+
+    int b_load_row = threadIdx.x / 32;
+    int b_load_col = (threadIdx.x % 32) * 4;
+
     for (int bk = 0; bk < K; bk += BK) {
-        // Load s_A (BM x BK = 64 * 8 = 512 elements across 256 threads -> 2 elements per thread)
-        #pragma unroll
-        for (int offset = 0; offset < (BM * BK); offset += ((BM / TM) * (BN / TN))) {
-            int idx = threadIdx.x + offset;
-            int r = idx / BK;
-            int c = idx % BK;
-            if (cRow + r < M && bk + c < K) {
-                s_A[r][c] = A[(cRow + r) * K + (bk + c)];
-            } else {
-                s_A[r][c] = 0.0f;
+        // Load s_A via float4 vectorized 128-bit memory instructions
+        if (cRow + a_load_row < M && bk + a_load_col + 3 < K) {
+            float4 a_val = __ldg(reinterpret_cast<const float4*>(&A[(cRow + a_load_row) * K + (bk + a_load_col)]));
+            s_A[a_load_row][a_load_col + 0] = a_val.x;
+            s_A[a_load_row][a_load_col + 1] = a_val.y;
+            s_A[a_load_row][a_load_col + 2] = a_val.z;
+            s_A[a_load_row][a_load_col + 3] = a_val.w;
+        } else {
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                if (cRow + a_load_row < M && bk + a_load_col + i < K) {
+                    s_A[a_load_row][a_load_col + i] = A[(cRow + a_load_row) * K + (bk + a_load_col + i)];
+                } else {
+                    s_A[a_load_row][a_load_col + i] = 0.0f;
+                }
             }
         }
 
-        // Load s_B (BK x BN = 8 * 64 = 512 elements across 256 threads -> 2 elements per thread)
-        #pragma unroll
-        for (int offset = 0; offset < (BK * BN); offset += ((BM / TM) * (BN / TN))) {
-            int idx = threadIdx.x + offset;
-            int r = idx / BN;
-            int c = idx % BN;
-            if (bk + r < K && cCol + c < N) {
-                s_B[r][c] = B[(bk + r) * N + (cCol + c)];
-            } else {
-                s_B[r][c] = 0.0f;
+        // Load s_B via float4 vectorized 128-bit memory instructions
+        if (bk + b_load_row < K && cCol + b_load_col + 3 < N) {
+            float4 b_val = __ldg(reinterpret_cast<const float4*>(&B[(bk + b_load_row) * N + (cCol + b_load_col)]));
+            s_B[b_load_row][b_load_col + 0] = b_val.x;
+            s_B[b_load_row][b_load_col + 1] = b_val.y;
+            s_B[b_load_row][b_load_col + 2] = b_val.z;
+            s_B[b_load_row][b_load_col + 3] = b_val.w;
+        } else {
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                if (bk + b_load_row < K && cCol + b_load_col + i < N) {
+                    s_B[b_load_row][b_load_col + i] = B[(bk + b_load_row) * N + (cCol + b_load_col + i)];
+                } else {
+                    s_B[b_load_row][b_load_col + i] = 0.0f;
+                }
             }
         }
 
         __syncthreads();
 
+        // 8x8 register micro-tile compute
         #pragma unroll
         for (int k = 0; k < BK; ++k) {
             float r_a[TM];

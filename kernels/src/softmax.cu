@@ -6,7 +6,7 @@
 namespace cuda_ml {
 namespace kernels {
 
-// 1. Numerically Stable Warp-Level Softmax Forward Pass (1 warp per row)
+// 1. Numerically Stable Warp-Level Softmax Forward Pass (1 warp per row) with 128-bit Vectorization
 __global__ void softmax_forward_kernel(const float* __restrict__ logits,
                                        float* __restrict__ probs,
                                        int N, int C) {
@@ -17,35 +17,52 @@ __global__ void softmax_forward_kernel(const float* __restrict__ logits,
         const float* row_logits = logits + row * C;
         float* row_probs = probs + row * C;
 
-        // Step 1: Find row maximum
+        int c4 = C / 4;
+        const float4* row_logits4 = reinterpret_cast<const float4*>(row_logits);
+        float4* row_probs4 = reinterpret_cast<float4*>(row_probs);
+
+        // Step 1: Find row maximum using float4 vectorized loads
         float max_val = -1e20f;
-        for (int c = lane; c < C; c += 32) {
+        for (int i = lane; i < c4; i += 32) {
+            float4 v = __ldg(&row_logits4[i]);
+            max_val = fmaxf(max_val, fmaxf(fmaxf(v.x, v.y), fmaxf(v.z, v.w)));
+        }
+        for (int c = c4 * 4 + lane; c < C; c += 32) {
             max_val = fmaxf(max_val, row_logits[c]);
         }
         max_val = warp_reduce_max(max_val);
-
-        // Broadcast max_val to all threads in warp
         max_val = __shfl_sync(FULL_MASK, max_val, 0);
 
         // Step 2: Compute exp and sum
         float sum_exp = 0.0f;
-        for (int c = lane; c < C; c += 32) {
-            float e = expf(row_logits[c] - max_val);
-            row_probs[c] = e; // temporary write
-            sum_exp += e;
+        for (int i = lane; i < c4; i += 32) {
+            float4 v = __ldg(&row_logits4[i]);
+            sum_exp += expf(v.x - max_val) + expf(v.y - max_val) + expf(v.z - max_val) + expf(v.w - max_val);
+        }
+        for (int c = c4 * 4 + lane; c < C; c += 32) {
+            sum_exp += expf(row_logits[c] - max_val);
         }
         sum_exp = warp_reduce_sum(sum_exp);
         sum_exp = __shfl_sync(FULL_MASK, sum_exp, 0);
 
-        // Step 3: Normalize
-        float inv_sum = 1.0f / (sum_exp + 1e-12f);
-        for (int c = lane; c < C; c += 32) {
-            row_probs[c] *= inv_sum;
+        // Step 3: Normalize and write out using float4 vectorized stores
+        float inv_sum = __fdividef(1.0f, sum_exp + 1e-12f);
+        for (int i = lane; i < c4; i += 32) {
+            float4 v = __ldg(&row_logits4[i]);
+            float4 out;
+            out.x = expf(v.x - max_val) * inv_sum;
+            out.y = expf(v.y - max_val) * inv_sum;
+            out.z = expf(v.z - max_val) * inv_sum;
+            out.w = expf(v.w - max_val) * inv_sum;
+            row_probs4[i] = out;
+        }
+        for (int c = c4 * 4 + lane; c < C; c += 32) {
+            row_probs[c] = expf(row_logits[c] - max_val) * inv_sum;
         }
     }
 }
 
-// 2. Online Safe FlashSoftmax (Running max and denominator updated in single pass)
+// 2. Online Safe FlashSoftmax with 128-bit Vectorization
 __global__ void online_safe_softmax_kernel(const float* __restrict__ logits,
                                            float* __restrict__ probs,
                                            int N, int C) {
@@ -56,11 +73,35 @@ __global__ void online_safe_softmax_kernel(const float* __restrict__ logits,
         const float* row_logits = logits + row * C;
         float* row_probs = probs + row * C;
 
+        int c4 = C / 4;
+        const float4* row_logits4 = reinterpret_cast<const float4*>(row_logits);
+        float4* row_probs4 = reinterpret_cast<float4*>(row_probs);
+
         float m_i = -1e20f;
         float d_i = 0.0f;
 
-        // Online safe max & exp-sum tracking
-        for (int c = lane; c < C; c += 32) {
+        // Online safe max & exp-sum tracking with float4 loads
+        for (int i = lane; i < c4; i += 32) {
+            float4 v = __ldg(&row_logits4[i]);
+            
+            float m_prev = m_i;
+            m_i = fmaxf(m_i, v.x);
+            d_i = d_i * expf(m_prev - m_i) + expf(v.x - m_i);
+
+            m_prev = m_i;
+            m_i = fmaxf(m_i, v.y);
+            d_i = d_i * expf(m_prev - m_i) + expf(v.y - m_i);
+
+            m_prev = m_i;
+            m_i = fmaxf(m_i, v.z);
+            d_i = d_i * expf(m_prev - m_i) + expf(v.z - m_i);
+
+            m_prev = m_i;
+            m_i = fmaxf(m_i, v.w);
+            d_i = d_i * expf(m_prev - m_i) + expf(v.w - m_i);
+        }
+
+        for (int c = c4 * 4 + lane; c < C; c += 32) {
             float x = row_logits[c];
             float m_prev = m_i;
             m_i = fmaxf(m_i, x);
@@ -80,8 +121,19 @@ __global__ void online_safe_softmax_kernel(const float* __restrict__ logits,
         m_i = __shfl_sync(FULL_MASK, m_i, 0);
         d_i = __shfl_sync(FULL_MASK, d_i, 0);
 
-        float inv_d = 1.0f / (d_i + 1e-12f);
-        for (int c = lane; c < C; c += 32) {
+        float inv_d = __fdividef(1.0f, d_i + 1e-12f);
+
+        for (int i = lane; i < c4; i += 32) {
+            float4 v = __ldg(&row_logits4[i]);
+            float4 out;
+            out.x = expf(v.x - m_i) * inv_d;
+            out.y = expf(v.y - m_i) * inv_d;
+            out.z = expf(v.z - m_i) * inv_d;
+            out.w = expf(v.w - m_i) * inv_d;
+            row_probs4[i] = out;
+        }
+
+        for (int c = c4 * 4 + lane; c < C; c += 32) {
             row_probs[c] = expf(row_logits[c] - m_i) * inv_d;
         }
     }

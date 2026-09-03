@@ -6,7 +6,7 @@
 namespace cuda_ml {
 namespace kernels {
 
-// 1. LayerNorm Forward with Welford Algorithm in Warp Registers
+// 1. LayerNorm Forward with Welford Algorithm, 128-bit Vectorization, and Single-Pass Register Caching
 __global__ void layernorm_forward_kernel(const float* __restrict__ X,
                                          const float* __restrict__ gamma,
                                          const float* __restrict__ beta,
@@ -21,12 +21,39 @@ __global__ void layernorm_forward_kernel(const float* __restrict__ X,
         const float* row_x = X + row * D;
         float* row_y = Y + row * D;
 
+        int d4 = D / 4;
+        const float4* row_x4 = reinterpret_cast<const float4*>(row_x);
+        float4* row_y4 = reinterpret_cast<float4*>(row_y);
+        const float4* gamma4 = gamma ? reinterpret_cast<const float4*>(gamma) : nullptr;
+        const float4* beta4  = beta  ? reinterpret_cast<const float4*>(beta)  : nullptr;
+
+        // Register cache for up to D = 1024 (8 float4s per thread)
+        constexpr int MAX_VECS = 8;
+        float4 reg_cache[MAX_VECS];
+
         // Welford algorithm for online mean and variance
         float mean = 0.0f;
         float m2 = 0.0f;
         float count = 0.0f;
 
-        for (int d = lane; d < D; d += 32) {
+        int vec_idx = 0;
+        for (int i = lane; i < d4; i += 32) {
+            float4 v = __ldg(&row_x4[i]);
+            if (vec_idx < MAX_VECS) {
+                reg_cache[vec_idx++] = v;
+            }
+
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                float x = (k == 0) ? v.x : ((k == 1) ? v.y : ((k == 2) ? v.z : v.w));
+                count += 1.0f;
+                float delta = x - mean;
+                mean += delta / count;
+                m2 += delta * (x - mean);
+            }
+        }
+
+        for (int d = d4 * 4 + lane; d < D; d += 32) {
             float x = row_x[d];
             count += 1.0f;
             float delta = x - mean;
@@ -59,8 +86,22 @@ __global__ void layernorm_forward_kernel(const float* __restrict__ X,
             if (save_rstd) save_rstd[row] = rstd;
         }
 
-        // Normalize and scale
-        for (int d = lane; d < D; d += 32) {
+        // Normalize and scale directly from cached registers!
+        vec_idx = 0;
+        for (int i = lane; i < d4; i += 32) {
+            float4 v = (vec_idx < MAX_VECS) ? reg_cache[vec_idx++] : __ldg(&row_x4[i]);
+            float4 g = gamma4 ? __ldg(&gamma4[i]) : make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+            float4 b = beta4  ? __ldg(&beta4[i])  : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+            float4 out;
+            out.x = (v.x - mean) * rstd * g.x + b.x;
+            out.y = (v.y - mean) * rstd * g.y + b.y;
+            out.z = (v.z - mean) * rstd * g.z + b.z;
+            out.w = (v.w - mean) * rstd * g.w + b.w;
+            row_y4[i] = out;
+        }
+
+        for (int d = d4 * 4 + lane; d < D; d += 32) {
             float x_hat = (row_x[d] - mean) * rstd;
             float g = (gamma != nullptr) ? gamma[d] : 1.0f;
             float b = (beta != nullptr) ? beta[d] : 0.0f;
