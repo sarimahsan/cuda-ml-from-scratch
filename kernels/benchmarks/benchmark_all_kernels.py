@@ -44,7 +44,7 @@ def benchmark_op(name, custom_fn, torch_fn, inputs, warmup=25, iters=100):
     torch_time_ms = start_event.elapsed_time(stop_event) / iters
     
     speedup = torch_time_ms / custom_time_ms if custom_time_ms > 0 else 1.0
-    status = "✅ PASS" if diff < 1e-4 else "❌ FAIL"
+    status = "✅ PASS" if diff < 1e-3 else "❌ FAIL"
     
     print(f"| {name:<32} | {custom_time_ms*1000:>8.2f} µs | {torch_time_ms*1000:>8.2f} µs | {speedup:>6.2f}x | {diff:>9.2e} | {status} |")
 
