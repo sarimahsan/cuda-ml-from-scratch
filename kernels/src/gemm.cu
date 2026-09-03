@@ -85,7 +85,133 @@ __global__ void gemm_tiled_kernel(const float* __restrict__ A,
 }
 
 // ============================================================================
-// 3. High-Performance GEMM: Double Buffering + Warp Tiling + Vectorized Epilogue
+// 3. Medium-Matrix GEMM (BM=64, BN=64, BK=8, TM=4, TN=4, 256 Threads)
+// Maximizes SM Occupancy for 256x256, 512x512, 1024x1024 matrices
+// ============================================================================
+__global__ void gemm_64x64_double_buffered_kernel(const float* __restrict__ A,
+                                                  const float* __restrict__ B,
+                                                  float* __restrict__ C,
+                                                  int M, int N, int K,
+                                                  float alpha, float beta) {
+    __shared__ float s_A[2][64][9]; // +1 padding
+    __shared__ float s_B[2][8][65];
+
+    int cRow = blockIdx.y * 64;
+    int cCol = blockIdx.x * 64;
+
+    int threadRowInBlock = (threadIdx.x / 16) * 4;
+    int threadColInBlock = (threadIdx.x % 16) * 4;
+
+    float r_c[4][4] = {0.0f};
+
+    int a_load_row = threadIdx.x / 4;
+    int a_load_col = (threadIdx.x % 4) * 2;
+
+    int b_load_row = threadIdx.x / 32;
+    int b_load_col = (threadIdx.x % 32) * 2;
+
+    auto load_tile = [&](int buffer_idx, int bk) {
+        #pragma unroll
+        for (int i = 0; i < 2; ++i) {
+            if (cRow + a_load_row < M && bk + a_load_col + i < K) {
+                s_A[buffer_idx][a_load_row][a_load_col + i] = A[(cRow + a_load_row) * K + (bk + a_load_col + i)];
+            } else {
+                s_A[buffer_idx][a_load_row][a_load_col + i] = 0.0f;
+            }
+        }
+
+        #pragma unroll
+        for (int i = 0; i < 2; ++i) {
+            if (bk + b_load_row < K && cCol + b_load_col + i < N) {
+                s_B[buffer_idx][b_load_row][b_load_col + i] = B[(bk + b_load_row) * N + (cCol + b_load_col + i)];
+            } else {
+                s_B[buffer_idx][b_load_row][b_load_col + i] = 0.0f;
+            }
+        }
+    };
+
+    load_tile(0, 0);
+    __syncthreads();
+
+    int num_tiles = (K + 7) / 8;
+
+    for (int t = 0; t < num_tiles; ++t) {
+        int cur = t & 1;
+        int nxt = (t + 1) & 1;
+        int next_bk = (t + 1) * 8;
+
+        float2 a_pref = make_float2(0.0f, 0.0f);
+        float2 b_pref = make_float2(0.0f, 0.0f);
+
+        if (t + 1 < num_tiles) {
+            if (cRow + a_load_row < M && next_bk + a_load_col < K) {
+                a_pref.x = A[(cRow + a_load_row) * K + (next_bk + a_load_col + 0)];
+                if (next_bk + a_load_col + 1 < K) {
+                    a_pref.y = A[(cRow + a_load_row) * K + (next_bk + a_load_col + 1)];
+                }
+            }
+            if (next_bk + b_load_row < K && cCol + b_load_col < N) {
+                b_pref.x = B[(next_bk + b_load_row) * N + (cCol + b_load_col + 0)];
+                if (cCol + b_load_col + 1 < N) {
+                    b_pref.y = B[(next_bk + b_load_row) * N + (cCol + b_load_col + 1)];
+                }
+            }
+        }
+
+        #pragma unroll
+        for (int k = 0; k < 8; ++k) {
+            float r_a[4];
+            float r_b[4];
+
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                r_a[i] = s_A[cur][threadRowInBlock + i][k];
+            }
+            #pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                r_b[j] = s_B[cur][k][threadColInBlock + j];
+            }
+
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                #pragma unroll
+                for (int j = 0; j < 4; ++j) {
+                    r_c[i][j] += r_a[i] * r_b[j];
+                }
+            }
+        }
+
+        if (t + 1 < num_tiles) {
+            __syncthreads();
+            s_A[nxt][a_load_row][a_load_col + 0] = a_pref.x;
+            s_A[nxt][a_load_row][a_load_col + 1] = a_pref.y;
+
+            s_B[nxt][b_load_row][b_load_col + 0] = b_pref.x;
+            s_B[nxt][b_load_row][b_load_col + 1] = b_pref.y;
+            __syncthreads();
+        }
+    }
+
+    // Epilogue
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            int g_row = cRow + threadRowInBlock + i;
+            int g_col = cCol + threadColInBlock + j;
+            if (g_row < M && g_col < N) {
+                if (beta == 0.0f) {
+                    C[g_row * N + g_col] = alpha * r_c[i][j];
+                } else {
+                    C[g_row * N + g_col] = alpha * r_c[i][j] + beta * C[g_row * N + g_col];
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// 4. High-Throughput GEMM: Double Buffering + Warp Tiling + Vectorized Epilogue
 // Tile: BM=128, BN=128, BK=8 | Warp: 64x32 (8 warps) | Thread: TM=8, TN=8
 // ============================================================================
 #define BM 128
@@ -131,7 +257,6 @@ __global__ void gemm_double_buffered_warp_tiled_kernel(const float* __restrict__
 
     // Helper lambda for loading 1 float4 tile into shared memory buffer
     auto load_tile = [&](int buffer_idx, int bk) {
-        // Load s_A
         if (cRow + a_load_row < M && bk + a_load_col + 3 < K) {
             float4 a_val = __ldg(reinterpret_cast<const float4*>(&A[(cRow + a_load_row) * K + (bk + a_load_col)]));
             s_A[buffer_idx][a_load_row][a_load_col + 0] = a_val.x;
@@ -149,7 +274,6 @@ __global__ void gemm_double_buffered_warp_tiled_kernel(const float* __restrict__
             }
         }
 
-        // Load s_B
         if (bk + b_load_row < K && cCol + b_load_col + 3 < N) {
             float4 b_val = __ldg(reinterpret_cast<const float4*>(&B[(bk + b_load_row) * N + (cCol + b_load_col)]));
             s_B[buffer_idx][b_load_row][b_load_col + 0] = b_val.x;
@@ -297,34 +421,62 @@ __global__ void gemm_double_buffered_warp_tiled_kernel(const float* __restrict__
 }
 
 // ============================================================================
-// 4. Split-K GEMM for Reduction-Heavy Shapes (K >> M, N)
+// 5. Tiled Split-K GEMM for Tall-Skinny / Reduction-Heavy Shapes (K >> M, N)
+// Divides K across split_k slices with shared memory tiling per slice
 // ============================================================================
-__global__ void gemm_split_k_kernel(const float* __restrict__ A,
-                                   const float* __restrict__ B,
-                                   float* __restrict__ C,
-                                   int M, int N, int K,
-                                   int split_k,
-                                   float alpha, float beta) {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void gemm_split_k_tiled_kernel(const float* __restrict__ A,
+                                         const float* __restrict__ B,
+                                         float* __restrict__ C,
+                                         int M, int N, int K,
+                                         int split_k,
+                                         float alpha, float beta) {
+    __shared__ float s_A[32][33];
+    __shared__ float s_B[32][33];
+
+    int row = blockIdx.y * 32 + threadIdx.y;
+    int col = blockIdx.x * 32 + threadIdx.x;
     int k_slice = blockIdx.z;
 
     int k_per_slice = (K + split_k - 1) / split_k;
     int k_start = k_slice * k_per_slice;
     int k_end = min(k_start + k_per_slice, K);
 
-    if (row < M && col < N) {
-        float sum = 0.0f;
-        for (int k = k_start; k < k_end; ++k) {
-            sum += A[row * K + k] * B[k * N + col];
+    float acc = 0.0f;
+    int num_tiles = (k_end - k_start + 31) / 32;
+
+    for (int t = 0; t < num_tiles; ++t) {
+        int a_k = k_start + t * 32 + threadIdx.x;
+        int b_k = k_start + t * 32 + threadIdx.y;
+
+        if (row < M && a_k < k_end) {
+            s_A[threadIdx.y][threadIdx.x] = A[row * K + a_k];
+        } else {
+            s_A[threadIdx.y][threadIdx.x] = 0.0f;
         }
 
-        atomicAdd(&C[row * N + col], alpha * sum);
+        if (b_k < k_end && col < N) {
+            s_B[threadIdx.y][threadIdx.x] = B[b_k * N + col];
+        } else {
+            s_B[threadIdx.y][threadIdx.x] = 0.0f;
+        }
+
+        __syncthreads();
+
+        #pragma unroll
+        for (int k = 0; k < 32; ++k) {
+            acc += s_A[threadIdx.y][k] * s_B[k][threadIdx.x];
+        }
+
+        __syncthreads();
+    }
+
+    if (row < M && col < N) {
+        atomicAdd(&C[row * N + col], alpha * acc);
     }
 }
 
 // ============================================================================
-// 5. Transposed GEMMs (Backpropagation)
+// 6. Transposed GEMMs (Backpropagation)
 // ============================================================================
 
 // C = A * B^T (A: M x K, B: N x K, C: M x N)
@@ -449,20 +601,33 @@ void gemm_split_k(const float* A, const float* B, float* C, int M, int N, int K,
     if (beta == 0.0f) {
         CUDA_CHECK(cudaMemsetAsync(C, 0, M * N * sizeof(float), stream));
     }
-    dim3 block(16, 16);
-    dim3 grid((N + 15) / 16, (M + 15) / 16, split_k);
-    gemm_split_k_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K, split_k, alpha, beta);
+    dim3 block(32, 32);
+    dim3 grid((N + 31) / 32, (M + 31) / 32, split_k);
+    gemm_split_k_tiled_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K, split_k, alpha, beta);
 }
 
 void gemm_register_tiled(const float* A, const float* B, float* C, int M, int N, int K,
                          float alpha, float beta, cudaStream_t stream) {
-    // Shape-Aware Dispatcher (Stage 6)
-    if (K >= 2048 && (M * N <= 256 * 256)) {
-        gemm_split_k(A, B, C, M, N, K, 8, alpha, beta, stream);
-    } else if (M < 64 || N < 64) {
+    int blocks_128 = ((M + 127) / 128) * ((N + 127) / 128);
+
+    // 1. Reduction-Heavy / High-K Tall-Skinny (e.g. 128x1024x4096): 16-way Split-K
+    if (K >= 2048 && blocks_128 <= 32) {
+        int split_k = (K >= 4096) ? 16 : 8;
+        gemm_split_k(A, B, C, M, N, K, split_k, alpha, beta, stream);
+    }
+    // 2. Small / Medium Square Cases (256, 512, 1024): 64x64 Block Tile to saturate SMs
+    else if (blocks_128 < 64 && M >= 64 && N >= 64) {
+        dim3 block(256);
+        dim3 grid((N + 63) / 64, (M + 63) / 64);
+        gemm_64x64_double_buffered_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K, alpha, beta);
+    }
+    // 3. Very Small Shapes: 32x32 Tiled
+    else if (M < 64 || N < 64) {
         gemm_tiled(A, B, C, M, N, K, alpha, beta, stream);
-    } else {
-        dim3 block((BM / TM) * (BN / TN)); // 256 threads arranged in warp hierarchy
+    }
+    // 4. Large Shapes (2048^3, 4096^3, 4096x4096x64): 128x128 Double-Buffered Warp-Tiled
+    else {
+        dim3 block((BM / TM) * (BN / TN)); // 256 threads
         dim3 grid((N + BN - 1) / BN, (M + BM - 1) / BM);
         gemm_double_buffered_warp_tiled_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K, alpha, beta);
     }
