@@ -25,7 +25,8 @@ void launch_gru_step_forward(
 );
 
 void launch_gru_step_backward(
-    const float* dh_total,
+    const float* dh_incoming,
+    const float* dh_recurrent,
     const float* h_prev,
     const float* gates_act,
     const float* g_hh,
@@ -39,7 +40,7 @@ void launch_gru_step_backward(
 );
 
 // -----------------------------------------------------------------------------
-// 1. High-Performance GRU Sequence Forward Pass
+// 1. High-Performance GRU Sequence Forward Pass (Zero-Copy Buffer Writes)
 // -----------------------------------------------------------------------------
 std::vector<torch::Tensor> gru_forward_sequence(
     torch::Tensor X_seq,  // [T, N, D]
@@ -70,7 +71,7 @@ std::vector<torch::Tensor> gru_forward_sequence(
         G_ih_all = torch::mm(X_flat, W_ih);
     }
 
-    // 2. Fused Recurrent Temporal Loop
+    // 2. Fused Recurrent Temporal Loop (Zero Memcpy DtoD)
     const float* b_hh_ptr = (b_hh.defined() && b_hh.numel() > 0) ? b_hh.data_ptr<float>() : nullptr;
     auto cur_h = h_0;
 
@@ -82,9 +83,9 @@ std::vector<torch::Tensor> gru_forward_sequence(
         float* d_gates_act_t = gates_act_seq.data_ptr<float>() + t * N * three_H;
         float* d_h_next = H_seq.data_ptr<float>() + t * N * H;
 
-        // Recurrent projection: G_hh = H_{t-1} [N x H] * W_hh [H x 3H]
-        auto G_hh_t = torch::mm(cur_h, W_hh);
-        G_hh_seq[t].copy_(G_hh_t);
+        // In-place recurrent GEMM directly into G_hh_seq[t] (Zero DtoD copy!)
+        auto G_hh_slice = G_hh_seq[t];
+        torch::mm_out(G_hh_slice, cur_h, W_hh);
 
         // Fused GRU Step: computes (r, z, n) and blends h_t
         launch_gru_step_forward(
@@ -130,12 +131,8 @@ std::vector<torch::Tensor> gru_backward_sequence(
     auto options = dH_seq.options();
     auto dG_ih_all = torch::empty({T * N, three_H}, options);
     auto dG_hh_all = torch::empty({T * N, three_H}, options);
-    auto dh_next = torch::zeros({N, H}, options);
+    auto dh_next = torch::empty({N, H}, options);
     auto dh_prev_direct = torch::empty({N, H}, options);
-
-    int total_h = N * H;
-    int threads = 256;
-    int blocks = (total_h + threads - 1) / threads;
 
     const float* b_hh_ptr = (b_hh.defined() && b_hh.numel() > 0) ? b_hh.data_ptr<float>() : nullptr;
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -148,15 +145,12 @@ std::vector<torch::Tensor> gru_backward_sequence(
         float* d_dg_hh_t = dG_hh_all.data_ptr<float>() + t * N * three_H;
 
         torch::Tensor h_prev_t = (t > 0) ? H_seq[t - 1] : h_0;
+        const float* d_dh_recurrent = (t < T - 1) ? dh_next.data_ptr<float>() : nullptr;
 
-        // 1. Accumulate incoming gradient: dh_curr = dH_seq[t] + dh_next
-        accumulate_inplace_kernel<<<blocks, threads, 0, stream>>>(
-            dh_next.data_ptr<float>(), d_dh_t, total_h
-        );
-
-        // 2. Fused GRU step backward
+        // 1. Fused GRU step backward + in-register incoming gradient accumulation
         launch_gru_step_backward(
-            dh_next.data_ptr<float>(),
+            d_dh_t,
+            d_dh_recurrent,
             h_prev_t.data_ptr<float>(),
             d_gates_act_t,
             d_g_hh_t,
@@ -169,9 +163,9 @@ std::vector<torch::Tensor> gru_backward_sequence(
             stream
         );
 
-        // 3. Recurrent state gradient: dh_next = dh_prev_direct + dg_hh_t * W_hh^T
+        // 2. Fused Recurrent GEMM + Direct Add Epilogue: dh_next = dh_prev_direct + dg_hh_t * W_hh^T
         auto dg_hh_t_tensor = dG_hh_all.narrow(0, t * N, N);
-        dh_next = dh_prev_direct + torch::mm(dg_hh_t_tensor, W_hh.t());
+        torch::addmm_out(dh_next, dh_prev_direct, dg_hh_t_tensor, W_hh.t());
     }
 
     // Batched parameter reductions across all timesteps

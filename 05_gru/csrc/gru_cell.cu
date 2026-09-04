@@ -80,17 +80,18 @@ __global__ void gru_step_forward_kernel(
 }
 
 // -----------------------------------------------------------------------------
-// 3. Fused GRU Step Backward Kernel
+// 3. Fused GRU Step Backward Kernel (with Fused In-Register dh Accumulation)
 // -----------------------------------------------------------------------------
 __global__ void gru_step_backward_kernel(
-    const float* __restrict__ dh_total,   // [N, H]
-    const float* __restrict__ h_prev,     // [N, H]
-    const float* __restrict__ gates_act,  // [N, 3H] -> [r, z, n]
-    const float* __restrict__ g_hh,       // [N, 3H] -> raw recurrent projections
-    const float* __restrict__ b_hh,       // [3H] (optional)
-    float* __restrict__ dg_ih,            // [N, 3H] -> [dz_r, dz_z, dz_n]
-    float* __restrict__ dg_hh,            // [N, 3H] -> [dz_r, dz_z, dG_hh_n]
-    float* __restrict__ dh_prev_direct,   // [N, H] -> direct gradient contribution (dh * z)
+    const float* __restrict__ dh_incoming,  // [N, H] -> dH_seq[t]
+    const float* __restrict__ dh_recurrent, // [N, H] -> dh_next from step t+1
+    const float* __restrict__ h_prev,       // [N, H]
+    const float* __restrict__ gates_act,    // [N, 3H] -> [r, z, n]
+    const float* __restrict__ g_hh,         // [N, 3H] -> raw recurrent projections
+    const float* __restrict__ b_hh,         // [3H] (optional)
+    float* __restrict__ dg_ih,              // [N, 3H] -> [dz_r, dz_z, dz_n]
+    float* __restrict__ dg_hh,              // [N, 3H] -> [dz_r, dz_z, dG_hh_n]
+    float* __restrict__ dh_prev_direct,     // [N, H] -> direct gradient contribution (dh * z)
     int N,
     int H
 ) {
@@ -102,7 +103,9 @@ __global__ void gru_step_backward_kernel(
 
         int base_3h = n * (3 * H);
 
-        float dh = dh_total[idx];
+        // Fused in-register accumulation: dh = dh_incoming + dh_recurrent
+        float dh = (dh_incoming != nullptr ? dh_incoming[idx] : 0.0f) + 
+                   (dh_recurrent != nullptr ? dh_recurrent[idx] : 0.0f);
         float hp = (h_prev != nullptr) ? h_prev[idx] : 0.0f;
 
         float r_val = gates_act[base_3h + h];
@@ -166,7 +169,8 @@ void launch_gru_step_forward(
 }
 
 void launch_gru_step_backward(
-    const float* dh_total,
+    const float* dh_incoming,
+    const float* dh_recurrent,
     const float* h_prev,
     const float* gates_act,
     const float* g_hh,
@@ -182,7 +186,7 @@ void launch_gru_step_backward(
     int threads = 256;
     int blocks = (total_elements + threads - 1) / threads;
     gru_step_backward_kernel<<<blocks, threads, 0, stream>>>(
-        dh_total, h_prev, gates_act, g_hh, b_hh, dg_ih, dg_hh, dh_prev_direct, N, H);
+        dh_incoming, dh_recurrent, h_prev, gates_act, g_hh, b_hh, dg_ih, dg_hh, dh_prev_direct, N, H);
 }
 
 } // namespace gru
