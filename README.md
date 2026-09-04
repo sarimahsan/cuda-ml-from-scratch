@@ -4,10 +4,14 @@
 
 ### 📑 Framework Architecture & Quick Navigation Tabs
 
-| ⚙️ [**CUDA Kernel Engine**](kernels/README.md) | 📊 [**01. Logistic Regression**](01_logistic_regression/README.md) | 🧠 [**02. MLP**](02_mlp/README.md) | 🔄 [**03. RNN**](03_rnn/README.md) | ⚡ [**04. LSTM**](04_lstm/README.md) |
-| :---: | :---: | :---: | :---: | :---: |
-| 8 Core Primitives • Fused Ops | Binary Hypothesis • Warp BCE | 2D Tiled GEMMs • Adam/SGD | Elman Recurrence • BPTT | Modular & Fused Gating • BPTT |
-| GEMM, Conv, Softmax, Norms | Titanic Survival ($N=891$) | MNIST Digits ($>98\%$) | Char LM Sequence ($T=64$) | Shakespeare SeqLM ($1.08\text{M tok/s}$) |
+| ⚙️ [**CUDA Kernel Engine**](kernels/README.md) | 📊 [**01. Logistic Regression**](01_logistic_regression/README.md) | 🧠 [**02. MLP**](02_mlp/README.md) | 🔄 [**03. RNN**](03_rnn/README.md) | ⚡ [**04. LSTM**](04_lstm/README.md) | 🔀 [**05. GRU**](05_gru/README.md) |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| 8 Core Primitives • Fused Ops | Binary Hypothesis • Warp BCE | 2D Tiled GEMMs • Adam/SGD | Elman Recurrence • BPTT | Modular & Fused Gating • BPTT | Fused 3-Gate Engine • BPTT |
+| GEMM, Conv, Softmax, Norms | Titanic Survival ($N=891$) | MNIST Digits ($>98\%$) | Char LM Sequence ($T=64$) | Shakespeare SeqLM ($1.08\text{M tok/s}$) | Char LM Sequence ($T=48$) |
+
+---
+
+> 💡 **Technical Analysis Guide**: Read [**`PERFORMANCE_DEEP_DIVE.md`**](PERFORMANCE_DEEP_DIVE.md) for a comprehensive breakdown of *how and why our custom CUDA kernels beat PyTorch & cuDNN*, covering kernel fusion, 128-bit vectorization, online register reductions, and autograd overhead elimination.
 
 ---
 
@@ -43,12 +47,34 @@ The [`kernels/`](kernels/) directory provides standalone, hardware-saturating GP
 | **02. MLP** | MNIST End-to-End Training ($5\text{ Epochs}, B=128$) | **$1.22\text{ s} \ (\mathbf{3.14\times})$** | $3.84\text{ s}$ | ✅ Exact ($\Delta < 10^{-6}$) | [📖 View README](02_mlp/README.md) |
 | **03. RNN** | Sequence Language Model ($T=128, N=128, H=512$) | **$1{,}264{,}576\text{ tok/s}$** | $1{,}188{,}584\text{ tok/s}$ | ✅ Exact ($\Delta < 1.53 \times 10^{-5}$) | [📖 View README](03_rnn/README.md) |
 | **04. LSTM** | Shakespeare LM ($T=64, N=64, H=256$) | **$1{,}082{,}754\text{ tok/s}$** | $977{,}868\text{ tok/s}$ | ✅ Exact ($\Delta < 1.26 \times 10^{-5}$) | [📖 View README](04_lstm/README.md) |
+| **05. GRU** | Sequence Language Model ($T=64, N=64, H=256$) | **Fused 3-Gate Engine** | Native `nn.GRU` | ✅ Exact ($\Delta < 10^{-5}$) | [📖 View README](05_gru/README.md) |
 
 ---
 
 ## 📂 Interactive Model Deep-Dives
 
 Click to expand the technical summary, CUDA kernel highlights, and quickstart commands for each model:
+
+<details>
+<summary><h3>🔀 Tab 05: Gated Recurrent Unit (GRU)</h3></summary>
+
+> **Directory**: [`05_gru/`](05_gru/) &nbsp;|&nbsp; **Full Documentation**: [`05_gru/README.md`](05_gru/README.md)
+
+#### Architecture & Highlights
+- **Precomputed Input GEMM**: Flattens entire sequence $[T \cdot N, D]$ into a single matrix multiplication ($G_{ih} = X_{\text{flat}} W_{ih} + b_{ih}$), eliminating $T-1$ kernel launch overheads.
+- **Fused In-Register 3-Gate Recurrence**: Computes Reset ($r_t$), Update ($z_t$), and Candidate ($n_t$) states directly in SM registers.
+- **Exact BPTT Autograd**: Analytical backpropagation through time with batched parameter reductions via `gemm_TN` and `gemm_NT`.
+- **Language Modeling Engine**: Complete character/token level sequence training and text generation.
+
+#### Quickstart
+```bash
+# Parity & Throughput Benchmarks
+python 05_gru/benchmark.py
+
+# Character Language Model Demo
+python 05_gru/train_sequence.py --epochs 10 --seq_len 48 --batch_size 32
+```
+</details>
 
 <details open>
 <summary><h3>⚡ Tab 04: Long Short-Term Memory (LSTM) Recurrent Neural Network</h3></summary>
@@ -159,6 +185,9 @@ python 03_rnn/benchmark.py
 
 # 5. Benchmark 04_lstm vs PyTorch:
 python 04_lstm/benchmark.py
+
+# 6. Benchmark 05_gru vs PyTorch:
+python 05_gru/benchmark.py
 ```
 
 ---
