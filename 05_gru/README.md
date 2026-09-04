@@ -87,29 +87,29 @@ For timestep $t \in \{0, 1, \dots, T-1\}$, input $\mathbf{x}_t \in \mathbb{R}^{N
 
 | Execution Phase | Custom CUDA (Mean $\pm$ Std) | PyTorch cuDNN (Mean $\pm$ Std) | CUDA Median | cuDNN Median | Speedup |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Forward Only** | $2.375 \pm 0.584\text{ ms}$ | $1.503 \pm 0.024\text{ ms}$ | $2.203\text{ ms}$ | $1.506\text{ ms}$ | $0.68\times$ |
-| **Backward Only** | $3.396 \pm 0.549\text{ ms}$ | $2.314 \pm 0.023\text{ ms}$ | $3.233\text{ ms}$ | $2.314\text{ ms}$ | $0.72\times$ |
-| **Forward + Backward (BPTT)** | $5.708 \pm 0.925\text{ ms}$ | $3.981 \pm 0.124\text{ ms}$ | $5.517\text{ ms}$ | $3.988\text{ ms}$ | $0.72\times$ |
+| **Forward Only** | $1.900 \pm 0.588\text{ ms}$ | $1.520 \pm 0.029\text{ ms}$ | $1.727\text{ ms}$ | $1.522\text{ ms}$ | **$0.88\times$** |
+| **Backward Only** | $2.903 \pm 0.219\text{ ms}$ | $2.343 \pm 0.022\text{ ms}$ | $2.859\text{ ms}$ | $2.342\text{ ms}$ | **$0.82\times$** |
+| **Forward + Backward (BPTT)** | $4.759 \pm 0.587\text{ ms}$ | $3.971 \pm 0.073\text{ ms}$ | $4.595\text{ ms}$ | $3.965\text{ ms}$ | **$0.86\times$** |
 
 ### 2. Statistical Distribution & Percentiles (Full BPTT)
 
 | Metric | Custom CUDA GRU | PyTorch Native cuDNN |
 | :--- | :---: | :---: |
-| **Mean $\pm$ Std Dev** | $5.7082 \pm 0.9249\text{ ms}$ | $3.9809 \pm 0.1243\text{ ms}$ |
-| **Median ($P_{50}$)** | **$5.5171\text{ ms}$** | **$3.9883\text{ ms}$** |
-| **$P_5$ (5th Percentile)** | $5.1695\text{ ms}$ | $3.8457\text{ ms}$ |
-| **$P_{95}$ (95th Percentile)** | $6.9152\text{ ms}$ | $4.1085\text{ ms}$ |
-| **Min / Max Range** | $[4.989,\, 10.867]\text{ ms}$ | $[3.361,\, 4.616]\text{ ms}$ |
+| **Mean $\pm$ Std Dev** | $4.7594 \pm 0.5868\text{ ms}$ | $3.9713 \pm 0.0731\text{ ms}$ |
+| **Median ($P_{50}$)** | **$4.5946\text{ ms}$** | **$3.9651\text{ ms}$** |
+| **$P_5$ (5th Percentile)** | $4.3276\text{ ms}$ | $3.8880\text{ ms}$ |
+| **$P_{95}$ (95th Percentile)** | $5.9891\text{ ms}$ | $4.0685\text{ ms}$ |
+| **Min / Max Range** | $[4.076,\, 7.965]\text{ ms}$ | $[3.617,\, 4.125]\text{ ms}$ |
 
 ### 3. Macrobenchmark: Sequence & Dimension Scaling ($150$ Timed Runs)
 
 | Configuration ($T \times N \times D \times H$) | CUDA Median | cuDNN Median | CUDA $P_5 - P_{95}$ Range | CUDA Throughput | Speedup vs cuDNN |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| $T=32, N=32, D=128, H=128$ | $3.295\text{ ms}$ | $1.101\text{ ms}$ | $[3.07, 4.61]\text{ ms}$ | $310,744\text{ tok/s}$ | $0.33\times$ |
-| $T=64, N=64, D=128, H=256$ | $5.447\text{ ms}$ | $3.974\text{ ms}$ | $[5.15, 6.54]\text{ ms}$ | $752,026\text{ tok/s}$ | $0.73\times$ |
-| **$T=128, N=64, D=256, H=512$** | **$21.928\text{ ms}$** | **$22.414\text{ ms}$** | **$[21.46, 23.02]\text{ ms}$** | **$373,592\text{ tok/s}$** | **$1.02\times$ 🚀** |
-| **$T=128, N=128, D=256, H=512$** | **$37.734\text{ ms}$** | **$40.300\text{ ms}$** | **$[36.87, 38.71]\text{ ms}$** | **$434,199\text{ tok/s}$** | **$1.07\times$ 🚀** |
-| **$T=256, N=64, D=256, H=512$** | **$45.973\text{ ms}$** | **$47.262\text{ ms}$** | **$[44.83, 47.90]\text{ ms}$** | **$356,386\text{ tok/s}$** | **$1.03\times$ 🚀** |
+| $T=32, N=32, D=128, H=128$ | $2.621\text{ ms}$ | $1.100\text{ ms}$ | $[2.48, 2.89]\text{ ms}$ | $390,706\text{ tok/s}$ | $0.42\times$ |
+| $T=64, N=64, D=128, H=256$ | $4.231\text{ ms}$ | $4.019\text{ ms}$ | $[4.03, 5.07]\text{ ms}$ | $968,047\text{ tok/s}$ | $0.95\times$ |
+| **$T=128, N=64, D=256, H=512$** | **$21.428\text{ ms}$** | **$22.817\text{ ms}$** | **$[20.89, 22.63]\text{ ms}$** | **$382,305\text{ tok/s}$** | **$1.06\times$ 🚀** |
+| **$T=128, N=128, D=256, H=512$** | **$37.137\text{ ms}$** | **$40.328\text{ ms}$** | **$[36.61, 38.29]\text{ ms}$** | **$441,174\text{ tok/s}$** | **$1.09\times$ (+9%) 🚀** |
+| **$T=256, N=64, D=256, H=512$** | **$45.583\text{ ms}$** | **$48.267\text{ ms}$** | **$[44.59, 47.28]\text{ ms}$** | **$359,433\text{ tok/s}$** | **$1.06\times$ 🚀** |
 
 ---
 
