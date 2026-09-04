@@ -12,6 +12,20 @@ __global__ void accumulate_inplace_kernel(float* __restrict__ accum,
                                          const float* __restrict__ delta,
                                          int size);
 
+void launch_gru_persistent_forward(
+    const float* G_ih_all,
+    const float* W_hh,
+    const float* b_hh,
+    const float* h_0,
+    float* H_seq,
+    float* gates_act_seq,
+    float* G_hh_seq,
+    int T,
+    int N,
+    int H,
+    cudaStream_t stream
+);
+
 void launch_gru_step_forward(
     const float* g_ih,
     const float* g_hh,
@@ -40,7 +54,7 @@ void launch_gru_step_backward(
 );
 
 // -----------------------------------------------------------------------------
-// 1. High-Performance GRU Sequence Forward Pass (Zero-Copy Buffer Writes)
+// 1. High-Performance GRU Sequence Forward Pass (Persistent Megakernel)
 // -----------------------------------------------------------------------------
 std::vector<torch::Tensor> gru_forward_sequence(
     torch::Tensor X_seq,  // [T, N, D]
@@ -71,37 +85,25 @@ std::vector<torch::Tensor> gru_forward_sequence(
         G_ih_all = torch::mm(X_flat, W_ih);
     }
 
-    // 2. Fused Recurrent Temporal Loop (Zero Memcpy DtoD)
+    // 2. Fused Persistent Megakernel: Single GPU kernel launch across all T timesteps
     const float* b_hh_ptr = (b_hh.defined() && b_hh.numel() > 0) ? b_hh.data_ptr<float>() : nullptr;
-    auto cur_h = h_0;
+    const float* h_0_ptr = (h_0.defined() && h_0.numel() > 0) ? h_0.data_ptr<float>() : nullptr;
 
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
-    for (int t = 0; t < T; ++t) {
-        float* d_g_ih_t = G_ih_all.data_ptr<float>() + t * N * three_H;
-        float* d_g_hh_t = G_hh_seq.data_ptr<float>() + t * N * three_H;
-        float* d_gates_act_t = gates_act_seq.data_ptr<float>() + t * N * three_H;
-        float* d_h_next = H_seq.data_ptr<float>() + t * N * H;
-
-        // In-place recurrent GEMM directly into G_hh_seq[t] (Zero DtoD copy!)
-        auto G_hh_slice = G_hh_seq[t];
-        torch::mm_out(G_hh_slice, cur_h, W_hh);
-
-        // Fused GRU Step: computes (r, z, n) and blends h_t
-        launch_gru_step_forward(
-            d_g_ih_t,
-            d_g_hh_t,
-            b_hh_ptr,
-            cur_h.data_ptr<float>(),
-            d_gates_act_t,
-            d_h_next,
-            N,
-            H,
-            stream
-        );
-
-        cur_h = H_seq[t];
-    }
+    launch_gru_persistent_forward(
+        G_ih_all.data_ptr<float>(),
+        W_hh.data_ptr<float>(),
+        b_hh_ptr,
+        h_0_ptr,
+        H_seq.data_ptr<float>(),
+        gates_act_seq.data_ptr<float>(),
+        G_hh_seq.data_ptr<float>(),
+        T,
+        N,
+        H,
+        stream
+    );
 
     auto h_T = H_seq[T - 1];
     return {H_seq, h_T, gates_act_seq, G_hh_seq, G_ih_all};
