@@ -192,10 +192,7 @@ __global__ void gru_persistent_forward_kernel(
             for (int k = 0; k < H; ++k) {
                 g_hh_j += s_h_prev[k] * W_hh[k * three_H + j];
             }
-            if (b_hh != nullptr) {
-                g_hh_j += b_hh[j];
-            }
-
+            // Store RAW recurrent projection (without b_hh) for exact backward compatibility
             G_hh_seq[base_ih_t + j] = g_hh_j;
         }
         __syncthreads();
@@ -209,6 +206,12 @@ __global__ void gru_persistent_forward_kernel(
             float g_hh_r = G_hh_seq[base_ih_t + h];
             float g_hh_z = G_hh_seq[base_ih_t + H + h];
             float g_hh_n = G_hh_seq[base_ih_t + 2 * H + h];
+
+            if (b_hh != nullptr) {
+                g_hh_r += b_hh[h];
+                g_hh_z += b_hh[H + h];
+                g_hh_n += b_hh[2 * H + h];
+            }
 
             float r_val = 1.0f / (1.0f + __expf(-(g_ih_r + g_hh_r)));
             float z_val = 1.0f / (1.0f + __expf(-(g_ih_z + g_hh_z)));
