@@ -28,7 +28,7 @@ void launch_gru_step_forward(
     int N, int H, cudaStream_t stream);
 
 void launch_gru_step_backward(
-    const float* dh_total, const float* h_prev, const float* gates_act,
+    const float* dh_incoming, const float* dh_recurrent, const float* h_prev, const float* gates_act,
     const float* g_hh, const float* b_hh, float* dg_ih, float* dg_hh,
     float* dh_prev_direct, int N, int H, cudaStream_t stream);
 
@@ -119,6 +119,7 @@ std::vector<torch::Tensor> gru_cell_backward_cuda(
     // 1. In-register step backward
     cuda_ml::gru::launch_gru_step_backward(
         dh_t.data_ptr<float>(),
+        nullptr, // dh_recurrent (nullptr for single step)
         h_prev.data_ptr<float>(),
         gates_act.data_ptr<float>(),
         g_hh.data_ptr<float>(),
