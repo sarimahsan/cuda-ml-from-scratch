@@ -81,14 +81,47 @@ For timestep $t \in \{0, 1, \dots, T-1\}$, input $\mathbf{x}_t \in \mathbb{R}^{N
 
 ---
 
+## 📊 Empirical Benchmarks (Tesla T4 GPU, 150 Repetitions)
+
+### 1. Isolated Phase Profiling ($T=64, N=64, D=128, H=256$)
+
+| Execution Phase | Custom CUDA (Mean $\pm$ Std) | PyTorch cuDNN (Mean $\pm$ Std) | CUDA Median | cuDNN Median | Speedup |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Forward Only** | $2.375 \pm 0.584\text{ ms}$ | $1.503 \pm 0.024\text{ ms}$ | $2.203\text{ ms}$ | $1.506\text{ ms}$ | $0.68\times$ |
+| **Backward Only** | $3.396 \pm 0.549\text{ ms}$ | $2.314 \pm 0.023\text{ ms}$ | $3.233\text{ ms}$ | $2.314\text{ ms}$ | $0.72\times$ |
+| **Forward + Backward (BPTT)** | $5.708 \pm 0.925\text{ ms}$ | $3.981 \pm 0.124\text{ ms}$ | $5.517\text{ ms}$ | $3.988\text{ ms}$ | $0.72\times$ |
+
+### 2. Statistical Distribution & Percentiles (Full BPTT)
+
+| Metric | Custom CUDA GRU | PyTorch Native cuDNN |
+| :--- | :---: | :---: |
+| **Mean $\pm$ Std Dev** | $5.7082 \pm 0.9249\text{ ms}$ | $3.9809 \pm 0.1243\text{ ms}$ |
+| **Median ($P_{50}$)** | **$5.5171\text{ ms}$** | **$3.9883\text{ ms}$** |
+| **$P_5$ (5th Percentile)** | $5.1695\text{ ms}$ | $3.8457\text{ ms}$ |
+| **$P_{95}$ (95th Percentile)** | $6.9152\text{ ms}$ | $4.1085\text{ ms}$ |
+| **Min / Max Range** | $[4.989,\, 10.867]\text{ ms}$ | $[3.361,\, 4.616]\text{ ms}$ |
+
+### 3. Macrobenchmark: Sequence & Dimension Scaling ($150$ Timed Runs)
+
+| Configuration ($T \times N \times D \times H$) | CUDA Median | cuDNN Median | CUDA $P_5 - P_{95}$ Range | CUDA Throughput | Speedup vs cuDNN |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| $T=32, N=32, D=128, H=128$ | $3.295\text{ ms}$ | $1.101\text{ ms}$ | $[3.07, 4.61]\text{ ms}$ | $310,744\text{ tok/s}$ | $0.33\times$ |
+| $T=64, N=64, D=128, H=256$ | $5.447\text{ ms}$ | $3.974\text{ ms}$ | $[5.15, 6.54]\text{ ms}$ | $752,026\text{ tok/s}$ | $0.73\times$ |
+| **$T=128, N=64, D=256, H=512$** | **$21.928\text{ ms}$** | **$22.414\text{ ms}$** | **$[21.46, 23.02]\text{ ms}$** | **$373,592\text{ tok/s}$** | **$1.02\times$ 🚀** |
+| **$T=128, N=128, D=256, H=512$** | **$37.734\text{ ms}$** | **$40.300\text{ ms}$** | **$[36.87, 38.71]\text{ ms}$** | **$434,199\text{ tok/s}$** | **$1.07\times$ 🚀** |
+| **$T=256, N=64, D=256, H=512$** | **$45.973\text{ ms}$** | **$47.262\text{ ms}$** | **$[44.83, 47.90]\text{ ms}$** | **$356,386\text{ tok/s}$** | **$1.03\times$ 🚀** |
+
+---
+
 ## 🚀 Quickstart & Usage
 
 ### 1. Run Verification & Throughput Benchmarks
 ```bash
-python 05_gru/benchmark.py
+python 05_gru/benchmark.py --warmup 50 --reps 150
 ```
 
 ### 2. Train Character-Level Language Model (Shakespeare)
 ```bash
 python 05_gru/train_sequence.py --epochs 10 --seq_len 48 --batch_size 32
 ```
+
